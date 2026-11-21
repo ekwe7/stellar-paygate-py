@@ -190,19 +190,9 @@ class SettleResponse(BaseModel):
     settled_amount: Optional[str] = Field(default=None, alias="settledAmount")
     error_reason: Optional[str] = Field(default=None, alias="errorReason")
     error_code: Optional[PayGateErrorCode] = Field(default=None, alias="errorCode")
-    """Result returned in the ``PAYMENT-RESPONSE`` header after verification.
-    """
 
-    model_config = ConfigDict(populate_by_name=True)
 
-    success: bool
-    scheme: Literal["exact", "upto"]
-    network: str
-    payer: str
-    transaction_hash: Optional[str] = Field(default=None, alias="transactionHash")
-    settled_amount: Optional[str] = Field(default=None, alias="settledAmount")
-    error_reason: Optional[str] = Field(default=None, alias="errorReason")
-    error_code: Optional[PayGateErrorCode] = Field(default=None, alias="errorCode")
+SettlementResponse = SettleResponse
 
 
 @dataclass
