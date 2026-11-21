@@ -1,0 +1,27 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Run Ruff check
+        run: uv run ruff check src tests
+      - name: Run Ruff format check
+        run: uv run ruff format --check src tests
+      - name: Run MyPy strict
+        run: uv run mypy --strict src tests
+      - name: Run Pytest
+        run: uv run pytest -q
