@@ -32,6 +32,7 @@ PAYMENT_RESPONSE_HEADER = "PAYMENT-RESPONSE"
 # Helper utilities
 # ---------------------------------------------------------------------------
 
+
 def _b64_decode(value: str) -> bytes:
     """Decode a Base64 string, raising a protocol error on failure."""
     try:
@@ -41,9 +42,11 @@ def _b64_decode(value: str) -> bytes:
             PayGateErrorCode.INVALID_HEADER, f"Base64 decode failed: {exc}"
         ) from exc
 
+
 def _b64_encode(data: str) -> str:
     """Encode a UTF‑8 string to Base64."""
     return base64.b64encode(data.encode("utf-8")).decode("ascii")
+
 
 def _json_load(data: bytes) -> Any:
     """Parse JSON bytes, ensuring the top‑level object is a dict.
@@ -57,14 +60,14 @@ def _json_load(data: bytes) -> Any:
             PayGateErrorCode.INVALID_PAYLOAD, f"JSON decode failed: {exc}"
         ) from exc
     if not isinstance(obj, dict):
-        raise PaygateProtocolError(
-            PayGateErrorCode.INVALID_PAYLOAD, "JSON root must be an object"
-        )
+        raise PaygateProtocolError(PayGateErrorCode.INVALID_PAYLOAD, "JSON root must be an object")
     return obj
+
 
 # ---------------------------------------------------------------------------
 # Public encode / decode functions
 # ---------------------------------------------------------------------------
+
 
 def encode_payment_required(msg: PaymentRequired) -> str:
     """Serialize ``PaymentRequired`` to a Base64‑encoded JSON string.

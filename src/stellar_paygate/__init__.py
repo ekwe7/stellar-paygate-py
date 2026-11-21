@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """stellar_paygate package initialization
 
 Expose core protocol symbols for convenient imports.
@@ -8,11 +7,10 @@ from __future__ import annotations
 
 # Re‑export submodules for backwards compatibility
 from . import client, codec, exact, fastapi_ext, fault_harness, types
-
 from .codec import (
     PAYMENT_REQUIRED_HEADER,
-    PAYMENT_SIGNATURE_HEADER,
     PAYMENT_RESPONSE_HEADER,
+    PAYMENT_SIGNATURE_HEADER,
     decode_payment_required,
     decode_payment_response,
     decode_payment_signature,
@@ -20,18 +18,17 @@ from .codec import (
     encode_payment_response,
     encode_payment_signature,
 )
-
 from .types import (
     FaultInjectionConfig,
     FeeMode,
     PayGateErrorCode,
     PaygateProtocolError,
     PaymentPayload,
-    PaymentRequirement,
     PaymentRequired,
+    PaymentRequirement,
     ResourceInfo,
-    SettlementResponse,
     Scheme,
+    SettlementResponse,
     StellarExtraConfig,
     StellarPaymentPayloadData,
 )
