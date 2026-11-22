@@ -7,6 +7,15 @@ from __future__ import annotations
 
 # Re‑export submodules for backwards compatibility
 from . import client, codec, exact, fastapi_ext, fault_harness, types
+from .client import (
+    PaygateAsyncTransport,
+    PaygateSyncTransport,
+    SpendPolicyGuard,
+    atomic_units_to_decimal,
+    compute_request_fingerprint,
+    decimal_to_atomic_units,
+    wrap_httpx_with_paygate,
+)
 from .codec import (
     PAYMENT_REQUIRED_HEADER,
     PAYMENT_RESPONSE_HEADER,
@@ -17,6 +26,25 @@ from .codec import (
     encode_payment_required,
     encode_payment_response,
     encode_payment_signature,
+)
+from .exact import (
+    ExactVerifier,
+    UptoVerifier,
+    VerificationPort,
+    VerifierConfig,
+    calculate_padded_resource_fee_stroops,
+    compute_payload_fingerprint,
+    get_verifier_for_scheme,
+    is_valid_stellar_address,
+    settle_payload,
+    verify_payload,
+)
+from .fastapi_ext import (
+    MeteredSettlementContext,
+    add_payment_middleware,
+    build_payment_required_challenge,
+    require_payment,
+    require_upto_ceiling,
 )
 from .types import (
     FaultInjectionConfig,
@@ -29,8 +57,10 @@ from .types import (
     ResourceInfo,
     Scheme,
     SettlementResponse,
+    SettleResponse,
     StellarExtraConfig,
     StellarPaymentPayloadData,
+    VerifyResponse,
 )
 
 __all__ = [
@@ -45,8 +75,35 @@ __all__ = [
     "PaymentRequired",
     "StellarPaymentPayloadData",
     "PaymentPayload",
+    "VerifyResponse",
+    "SettleResponse",
     "SettlementResponse",
     "FaultInjectionConfig",
+    # Verification & settlement engine
+    "VerifierConfig",
+    "VerificationPort",
+    "ExactVerifier",
+    "UptoVerifier",
+    "is_valid_stellar_address",
+    "calculate_padded_resource_fee_stroops",
+    "compute_payload_fingerprint",
+    "get_verifier_for_scheme",
+    "verify_payload",
+    "settle_payload",
+    # Client policy guard & HTTPX transports
+    "SpendPolicyGuard",
+    "PaygateSyncTransport",
+    "PaygateAsyncTransport",
+    "wrap_httpx_with_paygate",
+    "decimal_to_atomic_units",
+    "atomic_units_to_decimal",
+    "compute_request_fingerprint",
+    # FastAPI paywall extensions
+    "MeteredSettlementContext",
+    "add_payment_middleware",
+    "require_payment",
+    "require_upto_ceiling",
+    "build_payment_required_challenge",
     # Codec helpers
     "PAYMENT_REQUIRED_HEADER",
     "PAYMENT_SIGNATURE_HEADER",
