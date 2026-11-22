@@ -1,6 +1,6 @@
 # API Reference
 
-Complete reference for the public Python SDK classes, CLI commands, and wire models in `stellar-paygate-py`.
+Complete reference for the public Python SDK classes, verification engines, FastAPI extensions, HTTPX client transports, CLI commands, and wire models in `stellar-paygate-py`.
 
 ---
 
@@ -100,9 +100,53 @@ def verify_webhook(
 
 ---
 
-## 2. CLI Reference: `stellar-paygate`
+## 2. Verification & Settlement Engine (`stellar_paygate.exact`)
 
-### Command Summary
+Pure domain verification and idempotent settlement engines for the fixed-price `exact` and metered-ceiling `upto` schemes.
+
+### Classes & Functions
+
+| Symbol | Type | Description |
+| :--- | :--- | :--- |
+| `VerificationPort` | `Protocol` | Hexagonal port interface exposing `verify()` and `settle()`. |
+| `VerifierConfig` | `dataclass(frozen=True)` | Configurable `skew_tolerance_ledgers=5`, `allow_unsponsored_fees=True`, `refundable_fee_margin_basis_points=1500`, and account fee ceilings (`50,000` / `250,000` stroops). |
+| `ExactVerifier` | Class | Enforces fixed-price `exact` amount equality, ledger window validity, address format checks (`G-`, `C-`, `M-`), and idempotent settlement caching. |
+| `UptoVerifier` | Class | Enforces metered `upto` ceiling bounds (`0 < requested_amount <= authorized_ceiling`) and idempotent single-use settlement. |
+| `is_valid_stellar_address` | Function | Validates classic (`G...`), smart-contract (`C...`), and CAP-67 muxed (`M...`) Stellar addresses. |
+| `calculate_padded_resource_fee_stroops` | Function | Applies the `+15%` refundable rent safety margin capped at the account-aware fee ceiling. |
+| `verify_payload` / `settle_payload` | Functions | Convenience helpers that dispatch to `ExactVerifier` or `UptoVerifier` based on `payload.requirement.scheme`. |
+
+---
+
+## 3. Agent Spend-Policy Guard & HTTPX Transport (`stellar_paygate.client`)
+
+Client-side exact-integer spend guard and automatic HTTP 402 challenge-response transport wrappers for `httpx.Client` and `httpx.AsyncClient`.
+
+| Symbol | Type | Description |
+| :--- | :--- | :--- |
+| `SpendPolicyGuard` | Class | Enforces `max_per_call`, `max_budget`, `allowed_networks`, and `allowed_assets` with an in-flight request idempotency cache and `release_reservation()` rollback. |
+| `wrap_httpx_with_paygate` | Function | Wraps an `httpx.Client` or `httpx.AsyncClient` with `PaygateSyncTransport` or `PaygateAsyncTransport` to automatically answer `HTTP 402` challenges. |
+| `decimal_to_atomic_units` | Function | Quantizes a human-readable 7-decimal token string (e.g. `"0.51"` -> `5_100_000`) using `decimal.Decimal` with zero float drift. |
+| `atomic_units_to_decimal` | Function | Formats atomic integer units back into a 7-decimal token string. |
+
+---
+
+## 4. FastAPI Paywall Middleware & Route Dependencies (`stellar_paygate.fastapi_ext`)
+
+Drop-in middleware and route-level dependencies for protecting FastAPI endpoints with HTTP 402 payment challenges.
+
+| Symbol | Type | Description |
+| :--- | :--- | :--- |
+| `add_payment_middleware` | Function | Registers HTTP 402 middleware on a `FastAPI` application, bypassing `/health` and `/docs` while protecting configured routes. |
+| `require_payment` | Function | FastAPI `Depends(...)` factory enforcing an `exact` `PaymentRequirement` and returning the settled `SettleResponse`. |
+| `require_upto_ceiling` | Function | FastAPI `Depends(...)` factory pre-verifying an `upto` ceiling authorization and injecting a `MeteredSettlementContext`. |
+| `MeteredSettlementContext` | Dataclass | Provides `meter.settle_usage(actual_amount_stroops)` for post-execution metered token billing and attaches `PAYMENT-RESPONSE`. |
+
+---
+
+## 5. CLI Reference: `stellar-paygate` & `stellar-paygate-sim`
+
+### 5.1 `stellar-paygate` Command Summary
 
 | Command | Usage | Description | Exit Codes |
 | :--- | :--- | :--- | :--- |
@@ -146,9 +190,22 @@ optional options:
   --secret              Shared secret for HMAC-SHA256 check
 ```
 
+### 5.2 `stellar-paygate-sim` Offline Fault-Injection & Conformance CLI
+
+Executes the 10 canonical deterministic fault-injection scenarios (`S01`–`S10`) offline using `FaultInjectingSorobanRpc` (`stellar_paygate.fault_harness`):
+
+```bash
+# Emit a Markdown conformance table
+stellar-paygate-sim
+
+# Emit a structured JSON conformance report
+stellar-paygate-sim --json
+```
+* **Exit Codes**: `0` when all 10 scenarios pass, `1` if any scenario fails, `10` on invalid flags.
+
 ---
 
-## 3. Protocol Types & Enums
+## 6. Protocol Types & Enums
 
 Located in `stellar_paygate.types`:
 
@@ -161,10 +218,11 @@ Located in `stellar_paygate.types`:
 | `PaymentRequired` | Pydantic model | Wire structure of `PAYMENT-REQUIRED` HTTP header. |
 | `PaymentPayload` | Pydantic model | Wire structure of `PAYMENT-SIGNATURE` HTTP header. |
 | `SettlementResponse` | Pydantic model | Wire structure of `PAYMENT-RESPONSE` HTTP header. |
+| `FaultInjectionConfig` | Dataclass | Deterministic knobs (`ledger_skew`, `allow_unsponsored_fees`, `force_settlement_failure`, `override_settled_amount`, `duplicate_delivery_count`). |
 
 ---
 
-## 4. Codec Utilities
+## 7. Codec Utilities & Runnable Examples
 
 Located in `stellar_paygate.codec`:
 
@@ -174,3 +232,8 @@ Located in `stellar_paygate.codec`:
 * `decode_payment_signature(header: str) -> PaymentPayload`
 * `encode_payment_response(msg: SettlementResponse) -> str`
 * `decode_payment_response(header: str) -> SettlementResponse`
+
+Runnable offline scripts in [`examples/`](../examples/):
+
+* [`examples/basic_payment_and_url.py`](../examples/basic_payment_and_url.py) – SEP-0007 URL creation, signed testnet XDR verification, and Ed25519/HMAC webhook validation.
+* [`examples/fastapi_httpx_paywall_demo.py`](../examples/fastapi_httpx_paywall_demo.py) – In-memory FastAPI `exact` & `upto` paywalled routes queried by an `httpx.AsyncClient` wrapped with `wrap_httpx_with_paygate` and `SpendPolicyGuard`.

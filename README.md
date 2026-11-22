@@ -4,35 +4,35 @@
 [![PyPI version](https://img.shields.io/pypi/v/stellar-paygate.svg)](https://pypi.org/project/stellar-paygate/)
 [![GitHub release](https://img.shields.io/github/v/release/ekwe7/stellar-paygate-py?include_prereleases)](https://github.com/ekwe7/stellar-paygate-py/releases)
 
-Autonomous payment‑gateway SDK for the Stellar network.
+Autonomous HTTP 402 payment‑gateway SDK, agent spend-policy client, and deterministic offline fault-injection harness for the Stellar & Soroban network.
 
 **License:** MIT  
 **Status:** MVP Ready  
 **Architecture:** Modular Monolith  
-**Ecosystem:** Stellar
+**Ecosystem:** Stellar / Soroban
 
 ---
 
 ## Note
 
-**MVP v0.1.0 Complete:** `stellar-paygate-py` provides a lightweight Python SDK that enables developers to accept and verify Stellar payments, generate transaction URLs, and handle webhook callbacks without running a full Stellar node. The core library is covered by extensive unit tests and has been validated against the public Stellar testnet.
+**MVP v0.1.0 Complete:** `stellar-paygate-py` provides a lightweight Python SDK that enables developers to accept and verify Stellar payments (`exact` and metered `upto` schemes), protect FastAPI routes with HTTP 402 challenges, automate client payments via `httpx` and `SpendPolicyGuard`, generate SEP-0007 transaction URLs, and handle webhook callbacks without running a full Stellar node.
 
 ---
 
 ### 1. Problem Statement
 
-Integrating Stellar payments typically requires interacting directly with the Horizon API, managing account balances, constructing and signing transactions, and handling asynchronous webhook events. For many web services this results in boilerplate code, increased operational overhead, and a steep learning curve.
+Integrating Stellar payments and per-request HTTP 402 paywalls typically requires interacting directly with Horizon or Soroban RPC, managing account balances, constructing and signing transactions, enforcing client-side spend caps, and handling asynchronous webhook events. For web services and AI agents this results in boilerplate code, increased operational overhead, and a steep learning curve.
 
 ---
 
 ### 2. What Stellar Paygate‑Py Does
 
-`stellar-paygate-py` bridges this gap by offering a **tiny, opinionated SDK** that abstracts the low‑level Stellar primitives:
+`stellar-paygate-py` bridges this gap by offering a **tiny, opinionated SDK** that abstracts low‑level Stellar primitives:
 
-- **Accept & verify payments** – Parse incoming transaction XDRs, confirm signatures, and ensure the payment meets your business rules.
-- **Generate payment URLs** – One‑line helpers to create checkout links that direct users to the Stellar desktop or mobile wallet.
-- **Webhook handling** – Utilities to verify Stellar‑signed webhook payloads and deserialize them into Python objects.
-- **No full node required** – All interactions go through the public Horizon endpoints, keeping your deployment footprint minimal.
+- **Accept & verify payments (`ExactVerifier` & `UptoVerifier`)** – Parse incoming transaction XDRs and HTTP 402 `PAYMENT-SIGNATURE` payloads, validate ledger windows and clock skew, and settle idempotently.
+- **FastAPI 402 Paywalls & `httpx` Agent Auto-Pay** – Protect FastAPI endpoints with `add_payment_middleware`, `require_payment`, and `require_upto_ceiling`, and wrap `httpx` clients with `wrap_httpx_with_paygate` + `SpendPolicyGuard`.
+- **Generate payment URLs & verify webhooks** – One‑line helpers to create SEP-0007 checkout links and verify Ed25519 / HMAC-SHA256 webhook payloads.
+- **100% Offline Fault-Injection Harness (`stellar-paygate-sim`)** – Deterministic simulation of 10 canonical conformance scenarios (`S01`–`S10`).
 
 ---
 
@@ -40,10 +40,12 @@ Integrating Stellar payments typically requires interacting directly with the Ho
 
 | Component | Feature | Implementation Status | Tracking |
 |-----------|---------|----------------------|----------|
-| Core SDK | Payment verification | Completed (v0.1.0) | MVP Scope |
-| Core SDK | Transaction URL builder | Completed (v0.1.0) | MVP Scope |
-| Core SDK | Webhook signature verification | Completed (v0.1.0) | MVP Scope |
-| CLI (optional) | Simple `paygate` command line wrapper | Completed (v0.1.0) | [CLI Guide](docs/GETTING_STARTED.md#2-command-line-interface-cli-quickstart) |
+| Core SDK | Payment verification (`Paygate`, `ExactVerifier`, `UptoVerifier`) | Completed (v0.1.0) | [API Reference](docs/API_REFERENCE.md#2-verification--settlement-engine-stellar_paygateexact) |
+| Core SDK | Agent `SpendPolicyGuard` & `httpx` 402 transport | Completed (v0.1.0) | [API Reference](docs/API_REFERENCE.md#3-agent-spend-policy-guard--httpx-transport-stellar_paygateclient) |
+| Core SDK | FastAPI 402 paywall (`require_payment`, `require_upto_ceiling`) | Completed (v0.1.0) | [API Reference](docs/API_REFERENCE.md#4-fastapi-paywall-middleware--route-dependencies-stellar_paygatefastapi_ext) |
+| Core SDK | Transaction URL builder & webhook signature verification | Completed (v0.1.0) | [API Reference](docs/API_REFERENCE.md#1-sdk-client-paygate) |
+| CLI | `stellar-paygate` & `stellar-paygate-sim` (S01–S10 fault harness) | Completed (v0.1.0) | [CLI Guide](docs/GETTING_STARTED.md#2-command-line-interface-cli-quickstart) |
+| Examples | Runnable offline scripts (`examples/`) | Completed (v0.1.0) | [Examples](examples/) |
 | Documentation | API reference & quickstart guide | Completed (v0.1.0) | [Documentation](docs/GETTING_STARTED.md) |
 
 ---
@@ -51,8 +53,8 @@ Integrating Stellar payments typically requires interacting directly with the Ho
 ### 4. Usage Guide & Quickstart
 
 ```bash
-# Install the SDK and inspect the CLI commands
-pip install stellar-paygate-py && stellar-paygate --help
+# Install the SDK, inspect CLI commands, and run the 10 offline conformance scenarios
+pip install stellar-paygate-py && stellar-paygate --help && stellar-paygate-sim
 ```
 
 ```python
@@ -82,6 +84,13 @@ def webhook():
     return "", 400
 ```
 
+#### Runnable Example Scripts (`examples/`)
+
+You can run the self-contained offline demonstrations directly from the repository root:
+
+* **[`examples/basic_payment_and_url.py`](examples/basic_payment_and_url.py)** – SEP-0007 checkout URL creation, ephemeral signed payment XDR verification, and Ed25519 / HMAC-SHA256 webhook verification.
+* **[`examples/fastapi_httpx_paywall_demo.py`](examples/fastapi_httpx_paywall_demo.py)** – In-memory FastAPI server protected by `require_payment` (`exact`) and `require_upto_ceiling` (`upto`) queried by an `httpx.AsyncClient` wrapped with `wrap_httpx_with_paygate` and `SpendPolicyGuard`.
+
 ---
 
 ### 5. Documentation
@@ -89,7 +98,7 @@ def webhook():
 Comprehensive reference guides are available in the [`docs/`](docs/) directory:
 
 * **[Getting Started](docs/GETTING_STARTED.md)** – Step-by-step installation, CLI first-run, and SDK quickstart.
-* **[API Reference](docs/API_REFERENCE.md)** – Complete reference tables for public methods, CLI sub-commands, and protocol types.
+* **[API Reference](docs/API_REFERENCE.md)** – Complete reference tables for public methods, verifiers, FastAPI dependencies, CLI sub-commands, and protocol types.
 * **[Contributing Guide](docs/CONTRIBUTING.md)** – Development setup, code style standards, and test quality gates.
 * **[Architecture Overview](docs/architecture.md)** – Hexagonal architecture and modular monolith design.
 
@@ -98,4 +107,3 @@ Comprehensive reference guides are available in the [`docs/`](docs/) directory:
 ### 6. License
 
 `stellar-paygate-py` is released under the **MIT License**.
-
