@@ -13,7 +13,7 @@ import json
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 from .codec import decode_payment_required
 from .exact import (
@@ -54,6 +54,28 @@ class ConformanceScenarioResult:
     passed: bool
     expected_outcome: str
     observed_outcome: str
+
+
+@runtime_checkable
+class SorobanRpcReaderPort(Protocol):
+    """Port interface for Soroban RPC ledger readers and payment verification nodes."""
+
+    def get_facilitator_latest_ledger(self) -> int:
+        """Return the latest ledger sequence observed by this RPC node."""
+
+    def verify_payment(
+        self,
+        payment_payload: PaymentPayload,
+        requested_amount: int | str | None = None,
+    ) -> VerifyResponse:
+        """Verify a payment payload against this RPC node."""
+
+    def settle_payment(
+        self,
+        payment_payload: PaymentPayload,
+        requested_amount: int | str | None = None,
+    ) -> SettleResponse:
+        """Verify and settle a payment payload against this RPC node."""
 
 
 def build_scenario_payment_payload(
@@ -171,6 +193,100 @@ class FaultInjectingSorobanRpc:
 
         assert latest_response is not None
         return latest_response
+
+
+class QuorumSorobanRpcAdapter:
+    """Multi-RPC height quorum adapter eliminating negative ledger lag across RPC pools.
+
+    Queries ``get_facilitator_latest_ledger()`` across a pool of
+    :class:`SorobanRpcReaderPort` instances, ignores transient reader timeouts or
+    errors as long as at least one healthy reader responds, and routes
+    verification and settlement to the highest-ledger healthy reader with
+    automatic failover.
+    """
+
+    def __init__(
+        self,
+        rpc_readers: Sequence[SorobanRpcReaderPort],
+    ) -> None:
+        if not rpc_readers:
+            raise ValueError("QuorumSorobanRpcAdapter requires at least one RPC reader")
+        self.rpc_readers: tuple[SorobanRpcReaderPort, ...] = tuple(rpc_readers)
+
+    def _collect_healthy_readers_sorted_by_height(
+        self,
+    ) -> list[tuple[int, SorobanRpcReaderPort]]:
+        """Query all configured RPC readers and return healthy ones sorted by descending ledger."""
+        healthy_readers_with_heights: list[tuple[int, int, SorobanRpcReaderPort]] = []
+        last_observed_error: Exception | None = None
+
+        for reader_index, rpc_reader in enumerate(self.rpc_readers):
+            try:
+                observed_height: int = rpc_reader.get_facilitator_latest_ledger()
+                healthy_readers_with_heights.append((observed_height, -reader_index, rpc_reader))
+            except Exception as reader_exception:
+                last_observed_error = reader_exception
+
+        if not healthy_readers_with_heights:
+            raise RuntimeError(
+                "All Soroban RPC readers in QuorumSorobanRpcAdapter failed to report ledger height"
+            ) from last_observed_error
+
+        healthy_readers_with_heights.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+        return [
+            (height_val, reader_obj)
+            for height_val, _neg_idx, reader_obj in healthy_readers_with_heights
+        ]
+
+    def get_facilitator_latest_ledger(self) -> int:
+        """Return ``max(ledger_sequence)`` observed across all healthy RPC readers."""
+        sorted_healthy_readers = self._collect_healthy_readers_sorted_by_height()
+        highest_ledger_sequence, _top_reader = sorted_healthy_readers[0]
+        return highest_ledger_sequence
+
+    def verify_payment(
+        self,
+        payment_payload: PaymentPayload,
+        requested_amount: int | str | None = None,
+    ) -> VerifyResponse:
+        """Verify payment using the highest-ledger healthy reader with automatic failover."""
+        sorted_healthy_readers = self._collect_healthy_readers_sorted_by_height()
+        last_verification_error: Exception | None = None
+
+        for _reader_height, candidate_reader in sorted_healthy_readers:
+            try:
+                return candidate_reader.verify_payment(
+                    payment_payload=payment_payload,
+                    requested_amount=requested_amount,
+                )
+            except Exception as reader_exception:
+                last_verification_error = reader_exception
+
+        raise RuntimeError(
+            "All Soroban RPC readers failed during verify_payment failover"
+        ) from last_verification_error
+
+    def settle_payment(
+        self,
+        payment_payload: PaymentPayload,
+        requested_amount: int | str | None = None,
+    ) -> SettleResponse:
+        """Settle payment using the highest-ledger healthy reader with automatic failover."""
+        sorted_healthy_readers = self._collect_healthy_readers_sorted_by_height()
+        last_settlement_error: Exception | None = None
+
+        for _reader_height, candidate_reader in sorted_healthy_readers:
+            try:
+                return candidate_reader.settle_payment(
+                    payment_payload=payment_payload,
+                    requested_amount=requested_amount,
+                )
+            except Exception as reader_exception:
+                last_settlement_error = reader_exception
+
+        raise RuntimeError(
+            "All Soroban RPC readers failed during settle_payment failover"
+        ) from last_settlement_error
 
 
 def _run_scenario_s01_baseline_exact() -> ConformanceScenarioResult:
@@ -490,7 +606,9 @@ if __name__ == "__main__":
 
 __all__ = [
     "ConformanceScenarioResult",
+    "SorobanRpcReaderPort",
     "FaultInjectingSorobanRpc",
+    "QuorumSorobanRpcAdapter",
     "build_scenario_payment_payload",
     "run_conformance_scenarios",
     "format_conformance_markdown_report",

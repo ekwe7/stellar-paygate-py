@@ -12,6 +12,8 @@ from stellar_paygate.client import SpendPolicyGuard, wrap_httpx_with_paygate
 from stellar_paygate.fault_harness import (
     ConformanceScenarioResult,
     FaultInjectingSorobanRpc,
+    QuorumSorobanRpcAdapter,
+    SorobanRpcReaderPort,
     build_scenario_payment_payload,
     format_conformance_json_report,
     format_conformance_markdown_report,
@@ -244,3 +246,100 @@ def test_simulated_upstream_503_service_unavailable(
     )
     assert response_result.status_code == 503
     http_client.close()
+
+
+def test_quorum_soroban_rpc_adapter_eliminates_negative_ledger_skew() -> None:
+    """Verify QuorumSorobanRpcAdapter selects max(ledger_sequence) across lagging RPC nodes."""
+    with pytest.raises(ValueError, match="at least one RPC reader"):
+        QuorumSorobanRpcAdapter([])
+
+    lagging_reader_one = FaultInjectingSorobanRpc(
+        base_ledger=4_999_996,
+        skew_tolerance_ledgers=2,
+    )
+    head_reader_two = FaultInjectingSorobanRpc(
+        base_ledger=5_000_000,
+        skew_tolerance_ledgers=2,
+    )
+    lagging_reader_three = FaultInjectingSorobanRpc(
+        base_ledger=4_999_998,
+        skew_tolerance_ledgers=2,
+    )
+
+    assert isinstance(lagging_reader_one, SorobanRpcReaderPort)
+    quorum_adapter = QuorumSorobanRpcAdapter(
+        [lagging_reader_one, head_reader_two, lagging_reader_three]
+    )
+    assert isinstance(quorum_adapter, SorobanRpcReaderPort)
+    assert quorum_adapter.get_facilitator_latest_ledger() == 5_000_000
+
+    # Client signs at network head 5_000_000. Under strict 2-ledger tolerance:
+    # - Lagging reader at 4_999_996 (+4 skew) falsely rejects with CLOCK_SKEW_EXCEEDED.
+    # - QuorumSorobanRpcAdapter routes to the 5_000_000 head reader and passes cleanly!
+    fresh_head_payload = build_scenario_payment_payload(
+        ledger=5_000_000,
+        expiration_ledger=5_000_012,
+    )
+    lagging_verification = lagging_reader_one.verify_payment(fresh_head_payload)
+    assert lagging_verification.success is False
+    assert lagging_verification.error_code == PayGateErrorCode.CLOCK_SKEW_EXCEEDED
+
+    quorum_verification = quorum_adapter.verify_payment(fresh_head_payload)
+    assert quorum_verification.success is True
+    assert quorum_verification.error_code is None
+
+    quorum_settlement = quorum_adapter.settle_payment(fresh_head_payload)
+    assert quorum_settlement.success is True
+    assert quorum_settlement.settled_amount == "1000000"
+    assert head_reader_two.submission_count == 1
+
+
+def test_quorum_soroban_rpc_adapter_reader_timeout_failover() -> None:
+    """Verify QuorumSorobanRpcAdapter fails over cleanly when individual RPC readers fail."""
+    unhealthy_reader = MagicMock(spec=SorobanRpcReaderPort)
+    unhealthy_reader.get_facilitator_latest_ledger.side_effect = RuntimeError(
+        "RPC node 1 connection timed out"
+    )
+
+    failing_action_reader = MagicMock(spec=SorobanRpcReaderPort)
+    failing_action_reader.get_facilitator_latest_ledger.return_value = 5_000_002
+    failing_action_reader.verify_payment.side_effect = RuntimeError(
+        "RPC node 2 simulateTransaction 503 error"
+    )
+    failing_action_reader.settle_payment.side_effect = RuntimeError(
+        "RPC node 2 sendTransaction 503 error"
+    )
+
+    healthy_backup_reader = FaultInjectingSorobanRpc(
+        base_ledger=5_000_000,
+        skew_tolerance_ledgers=5,
+    )
+
+    quorum_adapter = QuorumSorobanRpcAdapter(
+        [unhealthy_reader, failing_action_reader, healthy_backup_reader]
+    )
+    assert quorum_adapter.get_facilitator_latest_ledger() == 5_000_002
+
+    payment_payload = build_scenario_payment_payload(
+        ledger=5_000_000,
+        expiration_ledger=5_000_012,
+    )
+    # failing_action_reader has height 5_000_002 so it is tried first, raises RuntimeError,
+    # and quorum_adapter automatically fails over to healthy_backup_reader at 5_000_000.
+    failover_verify = quorum_adapter.verify_payment(payment_payload)
+    assert failover_verify.success is True
+
+    failover_settle = quorum_adapter.settle_payment(payment_payload)
+    assert failover_settle.success is True
+    assert healthy_backup_reader.submission_count == 1
+
+    # When ALL readers fail, explicit RuntimeError is raised
+    all_dead_quorum = QuorumSorobanRpcAdapter([unhealthy_reader])
+    with pytest.raises(RuntimeError, match="failed to report ledger height"):
+        all_dead_quorum.get_facilitator_latest_ledger()
+
+    only_failing_action_quorum = QuorumSorobanRpcAdapter([failing_action_reader])
+    with pytest.raises(RuntimeError, match="verify_payment failover"):
+        only_failing_action_quorum.verify_payment(payment_payload)
+    with pytest.raises(RuntimeError, match="settle_payment failover"):
+        only_failing_action_quorum.settle_payment(payment_payload)
