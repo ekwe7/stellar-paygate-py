@@ -1,0 +1,21 @@
+{
+  "ignorePatterns": [
+    {
+      "pattern": "^http://localhost"
+    },
+    {
+      "pattern": "^http://127.0.0.1"
+    },
+    {
+      "pattern": "^https://api.example.com"
+    },
+    {
+      "pattern": "^https://example.com"
+    }
+  ],
+  "timeout": "20s",
+  "retryOn429": true,
+  "retryCount": 5,
+  "fallbackRetryDelay": "10s",
+  "aliveStatusCodes": [200, 206]
+}

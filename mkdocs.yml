@@ -1,0 +1,30 @@
+site_name: Stellar Paygate-Py
+site_description: Autonomous payment-gateway SDK & CLI for the Stellar network
+site_author: ekwe7
+repo_url: https://github.com/ekwe7/stellar-paygate-py
+repo_name: ekwe7/stellar-paygate-py
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+
+nav:
+  - Overview: index.md
+  - Getting Started: GETTING_STARTED.md
+  - API Reference: API_REFERENCE.md
+  - Contributing: CONTRIBUTING.md
+  - Architecture: architecture.md
+  - Protocol & Edge Cases: protocol-and-edge-cases.md
+  - Fault Injection: fault-injection.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed
+  - tables
+  - toc:
+      permalink: true
