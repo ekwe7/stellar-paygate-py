@@ -42,6 +42,10 @@ dev = [
 
 [project.scripts]
 stellar-paygate-sim = "stellar_paygate.fault_harness:main"
+stellar-paygate = "stellar_paygate.cli:main"
+
+[tool.poetry.scripts]
+stellar-paygate = "stellar_paygate.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/stellar_paygate"]

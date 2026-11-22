@@ -11,18 +11,15 @@ from .types import (
 )
 
 
-
 def verify_payload(payload: PaymentPayload) -> VerifyResponse:
     """Placeholder verification that always returns valid.
     Real implementation will perform scheme checks, ledger skew, signatures, etc.
     """
     return VerifyResponse(
-        is_valid=True,
-        invalid_reason=None,
-        invalid_detail=None,
+        success=True,
+        scheme=payload.requirement.scheme,
+        network=payload.requirement.network,
         payer=payload.payload.payer,
-        authorized_amount=payload.accepted.amount,
-        diagnostics=None,
     )
 
 
@@ -32,11 +29,9 @@ def settle_payload(payload: PaymentPayload) -> SettleResponse:
     """
     return SettleResponse(
         success=True,
-        error_reason=None,
-        error_detail=None,
+        scheme=payload.requirement.scheme,
+        network=payload.requirement.network,
         payer=payload.payload.payer,
-        transaction="DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF",
-        network=payload.accepted.network,
-        settled_amount=payload.accepted.amount,
-        idempotent_replay=False,
+        transaction_hash="DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF",
+        settled_amount=payload.requirement.amount,
     )

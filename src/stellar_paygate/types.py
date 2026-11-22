@@ -7,15 +7,16 @@ network imports are used – the module lives purely in the *Core* layer.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Optional, List
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Enums & error taxonomy
 # ---------------------------------------------------------------------------
+
 
 class Scheme(StrEnum):
     """Supported payment schemes.
@@ -74,9 +75,11 @@ class PaygateProtocolError(Exception):
         self.code = code
         self.detail = detail
 
+
 # ---------------------------------------------------------------------------
 # Core Pydantic models
 # ---------------------------------------------------------------------------
+
 
 class ResourceInfo(BaseModel):
     """Metadata about the protected HTTP resource."""
@@ -84,27 +87,23 @@ class ResourceInfo(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     url: str
-    description: Optional[str] = None
-    mime_type: Optional[str] = Field(default=None, alias="mimeType")
+    description: str | None = None
+    mime_type: str | None = Field(default=None, alias="mimeType")
 
 
 class StellarExtraConfig(BaseModel):
-    """Stellar‑specific configuration that lives inside ``PaymentRequirement``.
-    """
+    """Stellar‑specific configuration that lives inside ``PaymentRequirement``."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     are_fees_sponsored: bool = Field(default=True, alias="areFeesSponsored")
-    upto_contract: Optional[str] = Field(default=None, alias="uptoContract")
-    upto_profile: Optional[str] = Field(default=None, alias="uptoProfile")
-    max_transaction_fee_stroops: Optional[int] = Field(
-        default=None, alias="maxTransactionFeeStroops"
-    )
+    upto_contract: str | None = Field(default=None, alias="uptoContract")
+    upto_profile: str | None = Field(default=None, alias="uptoProfile")
+    max_transaction_fee_stroops: int | None = Field(default=None, alias="maxTransactionFeeStroops")
 
 
 class PaymentRequirement(BaseModel):
-    """A single payment option advertised in a ``PAYMENT-REQUIRED`` challenge.
-    """
+    """A single payment option advertised in a ``PAYMENT-REQUIRED`` challenge."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -123,20 +122,18 @@ class PaymentRequirement(BaseModel):
 
 
 class PaymentRequired(BaseModel):
-    """Wire representation of the HTTP 402 ``PAYMENT-REQUIRED`` header.
-    """
+    """Wire representation of the HTTP 402 ``PAYMENT-REQUIRED`` header."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     x402_version: int = Field(default=2, alias="x402Version")
-    error: Optional[str] = None
+    error: str | None = None
     resource: ResourceInfo
-    accepts: List[PaymentRequirement]
+    accepts: list[PaymentRequirement]
 
 
 class StellarPaymentPayloadData(BaseModel):
-    """Inner payload carried inside the ``PAYMENT-SIGNATURE`` header.
-    """
+    """Inner payload carried inside the ``PAYMENT-SIGNATURE`` header."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -145,15 +142,12 @@ class StellarPaymentPayloadData(BaseModel):
     ledger: int = Field(..., alias="ledger")
     expiration_ledger: int = Field(..., alias="expirationLedger")
     fee_mode: FeeMode = Field(..., alias="feeMode")
-    valid_after_ledger: Optional[int] = Field(default=None, alias="validAfterLedger")
-    signature_expiration_ledger: Optional[int] = Field(
-        default=None, alias="signatureExpirationLedger"
-    )
+    valid_after_ledger: int | None = Field(default=None, alias="validAfterLedger")
+    signature_expiration_ledger: int | None = Field(default=None, alias="signatureExpirationLedger")
 
 
 class PaymentPayload(BaseModel):
-    """Top‑level wrapper that adds protocol version information.
-    """
+    """Top‑level wrapper that adds protocol version information."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -163,7 +157,8 @@ class PaymentPayload(BaseModel):
 
 
 class VerifyResponse(BaseModel):
-    """Result of verification (pre‑settlement) returned via ``PAYMENT-RESPONSE`` when ``success`` is ``false``.
+    """Result of verification (pre‑settlement) returned via ``PAYMENT-RESPONSE``
+    when ``success`` is ``false``.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -172,13 +167,12 @@ class VerifyResponse(BaseModel):
     scheme: Literal["exact", "upto"]
     network: str
     payer: str
-    error_reason: Optional[str] = Field(default=None, alias="errorReason")
-    error_code: Optional[PayGateErrorCode] = Field(default=None, alias="errorCode")
+    error_reason: str | None = Field(default=None, alias="errorReason")
+    error_code: PayGateErrorCode | None = Field(default=None, alias="errorCode")
 
 
 class SettleResponse(BaseModel):
-    """Result of a successful settlement (``success`` is ``true``).
-    """
+    """Result of a successful settlement (``success`` is ``true``)."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -186,23 +180,13 @@ class SettleResponse(BaseModel):
     scheme: Literal["exact", "upto"]
     network: str
     payer: str
-    transaction_hash: Optional[str] = Field(default=None, alias="transactionHash")
-    settled_amount: Optional[str] = Field(default=None, alias="settledAmount")
-    error_reason: Optional[str] = Field(default=None, alias="errorReason")
-    error_code: Optional[PayGateErrorCode] = Field(default=None, alias="errorCode")
-    """Result returned in the ``PAYMENT-RESPONSE`` header after verification.
-    """
+    transaction_hash: str | None = Field(default=None, alias="transactionHash")
+    settled_amount: str | None = Field(default=None, alias="settledAmount")
+    error_reason: str | None = Field(default=None, alias="errorReason")
+    error_code: PayGateErrorCode | None = Field(default=None, alias="errorCode")
 
-    model_config = ConfigDict(populate_by_name=True)
 
-    success: bool
-    scheme: Literal["exact", "upto"]
-    network: str
-    payer: str
-    transaction_hash: Optional[str] = Field(default=None, alias="transactionHash")
-    settled_amount: Optional[str] = Field(default=None, alias="settledAmount")
-    error_reason: Optional[str] = Field(default=None, alias="errorReason")
-    error_code: Optional[PayGateErrorCode] = Field(default=None, alias="errorCode")
+SettlementResponse = SettleResponse
 
 
 @dataclass
@@ -216,5 +200,5 @@ class FaultInjectionConfig:
     ledger_skew: int = 0
     allow_unsponsored_fees: bool = True
     force_settlement_failure: bool = False
-    override_settled_amount: Optional[int] = None
+    override_settled_amount: int | None = None
     duplicate_delivery_count: int = 0
