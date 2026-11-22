@@ -18,6 +18,18 @@ from .codec import (
     encode_payment_response,
     encode_payment_signature,
 )
+from .exact import (
+    ExactVerifier,
+    UptoVerifier,
+    VerificationPort,
+    VerifierConfig,
+    calculate_padded_resource_fee_stroops,
+    compute_payload_fingerprint,
+    get_verifier_for_scheme,
+    is_valid_stellar_address,
+    settle_payload,
+    verify_payload,
+)
 from .types import (
     FaultInjectionConfig,
     FeeMode,
@@ -29,8 +41,10 @@ from .types import (
     ResourceInfo,
     Scheme,
     SettlementResponse,
+    SettleResponse,
     StellarExtraConfig,
     StellarPaymentPayloadData,
+    VerifyResponse,
 )
 
 __all__ = [
@@ -45,8 +59,21 @@ __all__ = [
     "PaymentRequired",
     "StellarPaymentPayloadData",
     "PaymentPayload",
+    "VerifyResponse",
+    "SettleResponse",
     "SettlementResponse",
     "FaultInjectionConfig",
+    # Verification & settlement engine
+    "VerifierConfig",
+    "VerificationPort",
+    "ExactVerifier",
+    "UptoVerifier",
+    "is_valid_stellar_address",
+    "calculate_padded_resource_fee_stroops",
+    "compute_payload_fingerprint",
+    "get_verifier_for_scheme",
+    "verify_payload",
+    "settle_payload",
     # Codec helpers
     "PAYMENT_REQUIRED_HEADER",
     "PAYMENT_SIGNATURE_HEADER",
