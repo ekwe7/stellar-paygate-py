@@ -39,6 +39,13 @@ from .exact import (
     settle_payload,
     verify_payload,
 )
+from .fastapi_ext import (
+    MeteredSettlementContext,
+    add_payment_middleware,
+    build_payment_required_challenge,
+    require_payment,
+    require_upto_ceiling,
+)
 from .types import (
     FaultInjectionConfig,
     FeeMode,
@@ -91,6 +98,12 @@ __all__ = [
     "decimal_to_atomic_units",
     "atomic_units_to_decimal",
     "compute_request_fingerprint",
+    # FastAPI paywall extensions
+    "MeteredSettlementContext",
+    "add_payment_middleware",
+    "require_payment",
+    "require_upto_ceiling",
+    "build_payment_required_challenge",
     # Codec helpers
     "PAYMENT_REQUIRED_HEADER",
     "PAYMENT_SIGNATURE_HEADER",
