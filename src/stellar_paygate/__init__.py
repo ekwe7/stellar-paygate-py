@@ -7,6 +7,15 @@ from __future__ import annotations
 
 # Re‑export submodules for backwards compatibility
 from . import client, codec, exact, fastapi_ext, fault_harness, types
+from .client import (
+    PaygateAsyncTransport,
+    PaygateSyncTransport,
+    SpendPolicyGuard,
+    atomic_units_to_decimal,
+    compute_request_fingerprint,
+    decimal_to_atomic_units,
+    wrap_httpx_with_paygate,
+)
 from .codec import (
     PAYMENT_REQUIRED_HEADER,
     PAYMENT_RESPONSE_HEADER,
@@ -74,6 +83,14 @@ __all__ = [
     "get_verifier_for_scheme",
     "verify_payload",
     "settle_payload",
+    # Client policy guard & HTTPX transports
+    "SpendPolicyGuard",
+    "PaygateSyncTransport",
+    "PaygateAsyncTransport",
+    "wrap_httpx_with_paygate",
+    "decimal_to_atomic_units",
+    "atomic_units_to_decimal",
+    "compute_request_fingerprint",
     # Codec helpers
     "PAYMENT_REQUIRED_HEADER",
     "PAYMENT_SIGNATURE_HEADER",
