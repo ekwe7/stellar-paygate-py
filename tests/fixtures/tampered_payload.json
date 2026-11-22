@@ -1,0 +1,7 @@
+{
+  "event": "payment_completed",
+  "amount": "999.00",
+  "asset": "XLM",
+  "destination": "GCY5ZDOBF23R546PDYDKAPK67UKPLUMMRCPXLCWGYMYLTFFMXADPABQX",
+  "timestamp": 1700000000
+}
