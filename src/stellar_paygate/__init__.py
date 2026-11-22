@@ -52,6 +52,10 @@ from .fault_harness import (
     FaultInjectingSorobanRpc,
     QuorumSorobanRpcAdapter,
     SorobanRpcReaderPort,
+    format_conformance_json_report,
+    format_conformance_junit_report,
+    format_conformance_markdown_report,
+    format_conformance_sarif_report,
     run_conformance_scenarios,
 )
 from .types import (
@@ -119,6 +123,10 @@ __all__ = [
     "FaultInjectingSorobanRpc",
     "QuorumSorobanRpcAdapter",
     "run_conformance_scenarios",
+    "format_conformance_markdown_report",
+    "format_conformance_json_report",
+    "format_conformance_sarif_report",
+    "format_conformance_junit_report",
     # Codec helpers
     "PAYMENT_REQUIRED_HEADER",
     "PAYMENT_SIGNATURE_HEADER",

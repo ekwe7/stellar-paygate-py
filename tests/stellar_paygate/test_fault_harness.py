@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import xml.etree.ElementTree as ElementTree
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -16,7 +17,9 @@ from stellar_paygate.fault_harness import (
     SorobanRpcReaderPort,
     build_scenario_payment_payload,
     format_conformance_json_report,
+    format_conformance_junit_report,
     format_conformance_markdown_report,
+    format_conformance_sarif_report,
     run_conformance_scenarios,
 )
 from stellar_paygate.fault_harness import main as fault_harness_main
@@ -343,3 +346,72 @@ def test_quorum_soroban_rpc_adapter_reader_timeout_failover() -> None:
         only_failing_action_quorum.verify_payment(payment_payload)
     with pytest.raises(RuntimeError, match="settle_payment failover"):
         only_failing_action_quorum.settle_payment(payment_payload)
+
+
+def test_fault_harness_sarif_and_junit_exporters(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify SARIF v2.1.0 and JUnit XML exporters via CLI --format and direct functions."""
+    # 1. CLI --format sarif
+    sarif_exit_code: int = fault_harness_main(["--format", "sarif"])
+    assert sarif_exit_code == 0
+    sarif_stdout: str = capsys.readouterr().out
+    sarif_document = json.loads(sarif_stdout)
+    assert sarif_document["version"] == "2.1.0"
+    assert "sarif-2.1.0.json" in sarif_document["$schema"]
+
+    sarif_run = sarif_document["runs"][0]
+    driver_info = sarif_run["tool"]["driver"]
+    assert driver_info["name"] == "stellar-paygate-sim"
+    assert len(driver_info["rules"]) == 10
+    assert len(sarif_run["results"]) == 10
+    for result_entry in sarif_run["results"]:
+        assert result_entry["kind"] == "pass"
+        assert result_entry["level"] == "note"
+
+    # 2. CLI --format junit
+    junit_exit_code: int = fault_harness_main(["--format", "junit"])
+    assert junit_exit_code == 0
+    junit_stdout: str = capsys.readouterr().out
+    assert junit_stdout.startswith('<?xml version="1.0" encoding="utf-8"?>')
+
+    parsed_xml_root = ElementTree.fromstring(junit_stdout)
+    assert parsed_xml_root.tag == "testsuites"
+    assert parsed_xml_root.attrib["tests"] == "10"
+    assert parsed_xml_root.attrib["failures"] == "0"
+
+    testsuite_node = parsed_xml_root.find("testsuite")
+    assert testsuite_node is not None
+    assert testsuite_node.attrib["tests"] == "10"
+    assert testsuite_node.attrib["failures"] == "0"
+    testcase_nodes = testsuite_node.findall("testcase")
+    assert len(testcase_nodes) == 10
+    for testcase_node in testcase_nodes:
+        assert testcase_node.find("failure") is None
+
+    # 3. Verify failure elements in SARIF and JUnit when a scenario fails
+    failed_scenario = ConformanceScenarioResult(
+        scenario_id="S04",
+        title="Unsponsored fee rejection",
+        passed=False,
+        expected_outcome="invalid_payload",
+        observed_outcome="success=True",
+    )
+    failed_sarif = json.loads(format_conformance_sarif_report([failed_scenario]))
+    assert failed_sarif["runs"][0]["results"][0]["kind"] == "fail"
+    assert failed_sarif["runs"][0]["results"][0]["level"] == "error"
+
+    failed_junit_xml = format_conformance_junit_report([failed_scenario])
+    failed_root = ElementTree.fromstring(failed_junit_xml)
+    assert failed_root.attrib["failures"] == "1"
+    failure_node = failed_root.find("./testsuite/testcase/failure")
+    assert failure_node is not None
+    assert "Expected 'invalid_payload'" in failure_node.attrib["message"]
+
+    monkeypatch.setattr(
+        "stellar_paygate.fault_harness.run_conformance_scenarios",
+        lambda: [failed_scenario],
+    )
+    assert fault_harness_main(["--format", "junit"]) == 1
+    capsys.readouterr()
