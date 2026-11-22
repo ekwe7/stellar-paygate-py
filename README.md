@@ -1,5 +1,7 @@
 # Stellar Paygate-Py
 
+[![CI](https://github.com/ekwe7/stellar-paygate-py/actions/workflows/ci.yml/badge.svg)](https://github.com/ekwe7/stellar-paygate-py/actions/workflows/ci.yml)
+
 Autonomous payment‑gateway SDK for the Stellar network.
 
 **License:** MIT  
@@ -61,18 +63,21 @@ paygate_client = Paygate()
 is_valid = paygate_client.verify_payment(xdr_string, expected_amount="10.0 XLM")
 
 # Generate a checkout URL for a customer
-checkout_url = paygate_client.create_payment_url(destination="GABC...", amount="10.0", memo="order-123")
+checkout_url = paygate_client.create_payment_url(
+    destination="GABC...", amount="10.0", memo="order-123"
+)
 print("Send the user to:", checkout_url)
 
+
 # Verify a webhook payload (Flask example)
-@app.route('/webhook', methods=['POST'])
+@app.route("/webhook", methods=["POST"])
 def webhook():
     payload = request.get_data()
-    signature = request.headers.get('Stellar-Signature')
+    signature = request.headers.get("Stellar-Signature")
     if paygate_client.verify_webhook(payload, signature):
         # process event
-        return '', 200
-    return '', 400
+        return "", 200
+    return "", 400
 ```
 
 ---

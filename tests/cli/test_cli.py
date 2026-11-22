@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
-import shutil
+import io
 import subprocess
 import sys
 from pathlib import Path
@@ -19,32 +19,39 @@ from stellar_sdk import (
 )
 
 from stellar_paygate.cli import build_argument_parser
+from stellar_paygate.cli import main as cli_main
 
 
 def execute_cli_command(
     command_arguments: list[str],
 ) -> subprocess.CompletedProcess[str]:
-    """Execute the CLI either via installed executable or module invocation."""
-    venv_executable_path = Path(__file__).resolve().parents[2] / ".venv" / "bin" / "stellar-paygate"
-    if venv_executable_path.is_file():
-        execution_arguments = [str(venv_executable_path), *command_arguments]
-    else:
-        executable_path: str | None = shutil.which("stellar-paygate")
-        if executable_path is not None:
-            execution_arguments = [executable_path, *command_arguments]
-        else:
-            execution_arguments = [
-                sys.executable,
-                "-m",
-                "stellar_paygate.cli",
-                *command_arguments,
-            ]
+    """Execute the CLI in-process capturing stdout, stderr, and exit code."""
+    captured_stdout_stream = io.StringIO()
+    captured_stderr_stream = io.StringIO()
+    original_stdout_stream = sys.stdout
+    original_stderr_stream = sys.stderr
+    exit_code_result: int = 0
 
-    return subprocess.run(
-        execution_arguments,
-        capture_output=True,
-        text=True,
-        check=False,
+    try:
+        sys.stdout = captured_stdout_stream
+        sys.stderr = captured_stderr_stream
+        exit_code_result = cli_main(command_arguments)
+    except SystemExit as system_exit_exception:
+        if system_exit_exception.code is None:
+            exit_code_result = 0
+        elif isinstance(system_exit_exception.code, int):
+            exit_code_result = system_exit_exception.code
+        else:
+            exit_code_result = 1
+    finally:
+        sys.stdout = original_stdout_stream
+        sys.stderr = original_stderr_stream
+
+    return subprocess.CompletedProcess(
+        args=["stellar-paygate", *command_arguments],
+        returncode=exit_code_result,
+        stdout=captured_stdout_stream.getvalue(),
+        stderr=captured_stderr_stream.getvalue(),
     )
 
 
