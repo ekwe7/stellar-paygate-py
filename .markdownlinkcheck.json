@@ -11,6 +11,9 @@
     },
     {
       "pattern": "^https://example.com"
+    },
+    {
+      "pattern": "^https://github.com/ekwe7/stellar-paygate-py/actions/workflows"
     }
   ],
   "timeout": "20s",
