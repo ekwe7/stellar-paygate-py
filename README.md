@@ -39,29 +39,29 @@ Integrating Stellar payments typically requires interacting directly with the Ho
 | Core SDK | Payment verification | Completed (v0.1.0) | MVP Scope |
 | Core SDK | Transaction URL builder | Completed (v0.1.0) | MVP Scope |
 | Core SDK | Webhook signature verification | Completed (v0.1.0) | MVP Scope |
-| CLI (optional) | Simple `paygate` command line wrapper | Planned (Sprint 2) | Roadmap |
-| Documentation | API reference & quickstart guide | Completed (v0.1.0) | Docs |
+| CLI (optional) | Simple `paygate` command line wrapper | Completed (v0.1.0) | [CLI Guide](docs/GETTING_STARTED.md#2-command-line-interface-cli-quickstart) |
+| Documentation | API reference & quickstart guide | Completed (v0.1.0) | [Documentation](docs/GETTING_STARTED.md) |
 
 ---
 
 ### 4. Usage Guide & Quickstart
 
 ```bash
-# Install the SDK via pip
-pip install stellar-paygate-py
+# Install the SDK and inspect the CLI commands
+pip install stellar-paygate-py && stellar-paygate --help
 ```
 
 ```python
-from stellar_paygate import Paygate
+from stellar_paygate.cli import Paygate
 
 # Initialise the SDK (provide your Horizon URL if you use a private network)
-pg = Paygate()
+paygate_client = Paygate()
 
 # Verify an incoming payment XDR
-is_valid = pg.verify_payment(xdr_string, expected_amount="10.0 XLM")
+is_valid = paygate_client.verify_payment(xdr_string, expected_amount="10.0 XLM")
 
 # Generate a checkout URL for a customer
-checkout_url = pg.create_payment_url(destination="GABC...", amount="10.0", memo="order‑123")
+checkout_url = paygate_client.create_payment_url(destination="GABC...", amount="10.0", memo="order-123")
 print("Send the user to:", checkout_url)
 
 # Verify a webhook payload (Flask example)
@@ -69,7 +69,7 @@ print("Send the user to:", checkout_url)
 def webhook():
     payload = request.get_data()
     signature = request.headers.get('Stellar-Signature')
-    if pg.verify_webhook(payload, signature):
+    if paygate_client.verify_webhook(payload, signature):
         # process event
         return '', 200
     return '', 400
@@ -77,7 +77,18 @@ def webhook():
 
 ---
 
-### 5. License
+### 5. Documentation
+
+Comprehensive reference guides are available in the [`docs/`](docs/) directory:
+
+* **[Getting Started](docs/GETTING_STARTED.md)** – Step-by-step installation, CLI first-run, and SDK quickstart.
+* **[API Reference](docs/API_REFERENCE.md)** – Complete reference tables for public methods, CLI sub-commands, and protocol types.
+* **[Contributing Guide](docs/CONTRIBUTING.md)** – Development setup, code style standards, and test quality gates.
+* **[Architecture Overview](docs/architecture.md)** – Hexagonal architecture and modular monolith design.
+
+---
+
+### 6. License
 
 `stellar-paygate-py` is released under the **MIT License**.
 
