@@ -1,6 +1,8 @@
 # Stellar Paygate-Py
 
 [![CI](https://github.com/ekwe7/stellar-paygate-py/actions/workflows/ci.yml/badge.svg)](https://github.com/ekwe7/stellar-paygate-py/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/stellar-paygate.svg)](https://pypi.org/project/stellar-paygate/)
+[![GitHub release](https://img.shields.io/github/v/release/ekwe7/stellar-paygate-py?include_prereleases)](https://github.com/ekwe7/stellar-paygate-py/releases)
 
 Autonomous payment‑gateway SDK for the Stellar network.
 
