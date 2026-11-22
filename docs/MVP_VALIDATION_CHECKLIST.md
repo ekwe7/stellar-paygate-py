@@ -47,8 +47,8 @@ All automated verification commands in this checklist are strictly **offline and
 
 ## 4. Client Policy & FastAPI / `httpx` End-to-End Checklist
 
-- [ ] **Exact Decimal Quantization**: `"0.51"` converts to `5_100_000` atomic units without float drift; $> 7$ decimal places raises `ValueError`.
-- [ ] **ASGI Middleware Paywall**: Unauthenticated request receives `402` + `PAYMENT-REQUIRED`; `httpx` auto-pay retry receives `200 OK` + `PAYMENT-RESPONSE`.
-- [ ] **FastAPI `require_payment` (`exact`)**: Route handler receives verified `SettleResponse` with confirmed transaction hash and payer address.
-- [ ] **FastAPI `require_upto_ceiling` (`upto`)**: Route handler settles post-execution metered token usage via `meter.settle_usage(actual_cost_stroops)`.
-- [ ] **Policy Guard Enforcement**: Per-call cap breaches, rolling budget breaches, and untrusted origins abort client-side before signing.
+- [x] **Exact Decimal Quantization**: `"0.51"` converts to `5_100_000` atomic units without float drift; $> 7$ decimal places raises `ValueError`.
+- [x] **ASGI Middleware Paywall**: Unauthenticated request receives `402` + `PAYMENT-REQUIRED`; `httpx` auto-pay retry receives `200 OK` + `PAYMENT-RESPONSE`.
+- [x] **FastAPI `require_payment` (`exact`)**: Route handler receives verified `SettleResponse` with confirmed transaction hash and payer address.
+- [x] **FastAPI `require_upto_ceiling` (`upto`)**: Route handler settles post-execution metered token usage via `meter.settle_usage(actual_cost_stroops)`.
+- [x] **Policy Guard Enforcement**: Per-call cap breaches, rolling budget breaches, and untrusted origins abort client-side before signing.
