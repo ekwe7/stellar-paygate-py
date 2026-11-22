@@ -46,6 +46,13 @@ from .fastapi_ext import (
     require_payment,
     require_upto_ceiling,
 )
+from .fault_harness import (
+    ConformanceScenarioResult,
+    FaultInjectingSorobanRpc,
+    QuorumSorobanRpcAdapter,
+    SorobanRpcReaderPort,
+    run_conformance_scenarios,
+)
 from .types import (
     FaultInjectionConfig,
     FeeMode,
@@ -104,6 +111,12 @@ __all__ = [
     "require_payment",
     "require_upto_ceiling",
     "build_payment_required_challenge",
+    # Fault harness & multi-RPC quorum adapter
+    "ConformanceScenarioResult",
+    "SorobanRpcReaderPort",
+    "FaultInjectingSorobanRpc",
+    "QuorumSorobanRpcAdapter",
+    "run_conformance_scenarios",
     # Codec helpers
     "PAYMENT_REQUIRED_HEADER",
     "PAYMENT_SIGNATURE_HEADER",
