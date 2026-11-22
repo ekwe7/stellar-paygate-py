@@ -11,6 +11,7 @@ from .client import (
     PaygateAsyncTransport,
     PaygateSyncTransport,
     SpendPolicyGuard,
+    SqliteIdempotencyStore,
     atomic_units_to_decimal,
     compute_request_fingerprint,
     decimal_to_atomic_units,
@@ -98,6 +99,7 @@ __all__ = [
     "verify_payload",
     "settle_payload",
     # Client policy guard & HTTPX transports
+    "SqliteIdempotencyStore",
     "SpendPolicyGuard",
     "PaygateSyncTransport",
     "PaygateAsyncTransport",
