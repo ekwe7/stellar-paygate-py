@@ -1,0 +1,101 @@
+name: Release and Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Perform a dry-run build and verification without uploading to PyPI'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build Distribution Packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Poetry installation and pip packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+          key: ${{ runner.os }}-poetry-release-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-release-
+            ${{ runner.os }}-poetry-
+
+      - name: Install Poetry packaging tool
+        run: |
+          python -m pip install --upgrade pip poetry
+
+      - name: Build sdist and wheel packages
+        run: |
+          poetry build
+
+      - name: Upload distribution packages artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+          retention-days: 5
+
+  publish:
+    name: Publish to PyPI and GitHub Releases
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository source
+        uses: actions/checkout@v4
+
+      - name: Download distribution packages artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Create GitHub Release Draft
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate PyPI authentication token presence
+        id: validate_token
+        env:
+          PYPI_AUTHENTICATION_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          DRY_RUN_SELECTION: ${{ inputs.dry_run || false }}
+        run: |
+          if [ "$DRY_RUN_SELECTION" = "true" ]; then
+            echo "Dry-run execution requested. Skipping PyPI upload."
+            echo "publish_to_pypi=false" >> $GITHUB_OUTPUT
+          elif [ -z "$PYPI_AUTHENTICATION_TOKEN" ]; then
+            echo "::error::PYPI_TOKEN repository secret is missing. Please add PYPI_TOKEN to repository Settings -> Secrets and variables -> Actions to enable PyPI publishing."
+            exit 1
+          else
+            echo "publish_to_pypi=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish package distribution to PyPI
+        if: steps.validate_token.outputs.publish_to_pypi == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}

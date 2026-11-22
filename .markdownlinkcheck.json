@@ -14,6 +14,15 @@
     },
     {
       "pattern": "^https://github.com/ekwe7/stellar-paygate-py/actions/workflows"
+    },
+    {
+      "pattern": "^https://img.shields.io"
+    },
+    {
+      "pattern": "^https://pypi.org/project"
+    },
+    {
+      "pattern": "^https://github.com/ekwe7/stellar-paygate-py/releases"
     }
   ],
   "timeout": "20s",
