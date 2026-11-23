@@ -11,11 +11,19 @@ scheme), and :func:`require_upto_ceiling` (metered ``upto`` scheme with
 # so that FastAPI's dependency injector receives concrete ``Request`` and
 # ``Response`` runtime classes rather than stringified forward references.
 
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Iterable,
+    Mapping,
+)
 from dataclasses import dataclass, field
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .codec import (
     PAYMENT_REQUIRED_HEADER,
@@ -196,6 +204,94 @@ class MeteredSettlementContext:
         self.last_settlement = settlement_result
         self.response.headers[PAYMENT_RESPONSE_HEADER] = encode_payment_response(settlement_result)
         return settlement_result
+
+
+class PayGateStreamingUptoResponse(StreamingResponse):
+    """Server-Sent Events (SSE) streaming response with real-time ``upto`` token metering.
+
+    Wraps an async or sync token chunk iterator, accumulates ``atomic_cost_per_chunk``
+    on each emitted chunk, halts generation cleanly if the running cost reaches the
+    client's signed ``upto`` authorization ceiling, settles exact delivered usage via
+    :meth:`MeteredSettlementContext.settle_usage`, and appends a terminal
+    ``event: paygate-receipt`` SSE frame containing the :class:`SettleResponse` JSON.
+    """
+
+    def __init__(
+        self,
+        chunk_stream: AsyncIterable[str | bytes] | Iterable[str | bytes],
+        meter: MeteredSettlementContext,
+        atomic_cost_per_chunk: int,
+        status_code: int = 200,
+        headers: Mapping[str, str] | None = None,
+        media_type: str = "text/event-stream",
+    ) -> None:
+        if atomic_cost_per_chunk <= 0:
+            raise ValueError("atomic_cost_per_chunk must be a positive integer")
+
+        self.meter: MeteredSettlementContext = meter
+        self.atomic_cost_per_chunk: int = atomic_cost_per_chunk
+        self.authorized_ceiling_stroops: int = int(meter.payment_payload.requirement.amount.strip())
+        self.accumulated_cost_stroops: int = 0
+        self.delivered_chunk_count: int = 0
+        self.ceiling_cutoff_triggered: bool = False
+
+        super().__init__(
+            content=self._meter_and_format_sse_stream(chunk_stream),
+            status_code=status_code,
+            headers=headers,
+            media_type=media_type,
+        )
+
+    async def _iterate_chunks_as_strings(
+        self,
+        chunk_stream: AsyncIterable[str | bytes] | Iterable[str | bytes],
+    ) -> AsyncIterator[str]:
+        if isinstance(chunk_stream, AsyncIterable):
+            async for raw_chunk in chunk_stream:
+                yield (
+                    raw_chunk.decode("utf-8") if isinstance(raw_chunk, bytes) else str(raw_chunk)
+                )
+        else:
+            for raw_chunk in chunk_stream:
+                yield (
+                    raw_chunk.decode("utf-8") if isinstance(raw_chunk, bytes) else str(raw_chunk)
+                )
+
+    async def _meter_and_format_sse_stream(
+        self,
+        chunk_stream: AsyncIterable[str | bytes] | Iterable[str | bytes],
+    ) -> AsyncIterator[str]:
+        generator_closed_early: bool = False
+        try:
+            async for chunk_text in self._iterate_chunks_as_strings(chunk_stream):
+                projected_cost: int = self.accumulated_cost_stroops + self.atomic_cost_per_chunk
+                if projected_cost > self.authorized_ceiling_stroops:
+                    self.ceiling_cutoff_triggered = True
+                    yield (
+                        "event: paygate-ceiling-reached\n"
+                        f'data: {{"authorizedCeiling": "{self.authorized_ceiling_stroops}", '
+                        f'"accumulatedCost": "{self.accumulated_cost_stroops}"}}\n\n'
+                    )
+                    break
+
+                self.accumulated_cost_stroops = projected_cost
+                self.delivered_chunk_count += 1
+                yield f"data: {chunk_text}\n\n"
+        except BaseException:
+            generator_closed_early = True
+            raise
+        finally:
+            if self.accumulated_cost_stroops > 0 and self.meter.last_settlement is None:
+                settlement_receipt: SettleResponse = self.meter.settle_usage(
+                    self.accumulated_cost_stroops
+                )
+                self.headers[PAYMENT_RESPONSE_HEADER] = encode_payment_response(settlement_receipt)
+                if not generator_closed_early:
+                    receipt_json: str = settlement_receipt.model_dump_json(
+                        by_alias=True,
+                        exclude_none=True,
+                    )
+                    yield f"event: paygate-receipt\ndata: {receipt_json}\n\n"
 
 
 def require_payment(
@@ -530,6 +626,7 @@ def add_payment_middleware(
 
 __all__ = [
     "MeteredSettlementContext",
+    "PayGateStreamingUptoResponse",
     "add_payment_middleware",
     "require_payment",
     "require_upto_ceiling",

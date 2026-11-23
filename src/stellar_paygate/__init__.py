@@ -42,6 +42,7 @@ from .exact import (
 )
 from .fastapi_ext import (
     MeteredSettlementContext,
+    PayGateStreamingUptoResponse,
     add_payment_middleware,
     build_payment_required_challenge,
     require_payment,
@@ -113,6 +114,7 @@ __all__ = [
     "compute_request_fingerprint",
     # FastAPI paywall extensions
     "MeteredSettlementContext",
+    "PayGateStreamingUptoResponse",
     "add_payment_middleware",
     "require_payment",
     "require_upto_ceiling",

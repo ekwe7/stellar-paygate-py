@@ -3,11 +3,12 @@
 # NOTE: ``from __future__ import annotations`` is intentionally omitted so
 # FastAPI route handlers resolve concrete ``Depends(...)`` types at runtime.
 
+from collections.abc import AsyncIterator
 from typing import Annotated, Literal
 
 import httpx
 import pytest
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.testclient import TestClient
 
 from stellar_paygate.client import SpendPolicyGuard, wrap_httpx_with_paygate
@@ -19,9 +20,10 @@ from stellar_paygate.codec import (
     decode_payment_response,
     encode_payment_signature,
 )
-from stellar_paygate.exact import VerifierConfig
+from stellar_paygate.exact import UptoVerifier, VerifierConfig
 from stellar_paygate.fastapi_ext import (
     MeteredSettlementContext,
+    PayGateStreamingUptoResponse,
     add_payment_middleware,
     require_payment,
     require_upto_ceiling,
@@ -457,4 +459,155 @@ async def test_end_to_end_asgi_httpx_auto_pay_exact_and_upto_flows() -> None:
 
     # Total budget reserved on client: 1,000,000 + 2,000,000 (ceiling) + 500,000 = 3,500,000
     assert policy_guard.consumed_budget == 3_500_000
+    await async_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sse_streaming_upto_response_normal_cutoff_and_disconnect() -> None:
+    """Verify PayGateStreamingUptoResponse normal completion, ceiling cutoff, and partial close."""
+    app = FastAPI()
+    streaming_requirement = make_route_requirement(scheme="upto", amount="500000")
+    upto_stream_dependency = require_upto_ceiling(
+        requirement=streaming_requirement,
+        current_ledger=500_000,
+    )
+
+    last_created_stream_response: PayGateStreamingUptoResponse | None = None
+
+    @app.get("/v1/stream-async")
+    def stream_async_tokens(
+        total_chunks: int,
+        cost_per_chunk: int,
+        meter: Annotated[MeteredSettlementContext, Depends(upto_stream_dependency)],
+    ) -> PayGateStreamingUptoResponse:
+        nonlocal last_created_stream_response
+
+        async def async_token_generator() -> AsyncIterator[str | bytes]:
+            for index in range(1, total_chunks + 1):
+                if index == 1:
+                    yield f"token-{index}".encode()
+                else:
+                    yield f"token-{index}"
+
+        last_created_stream_response = PayGateStreamingUptoResponse(
+            chunk_stream=async_token_generator(),
+            meter=meter,
+            atomic_cost_per_chunk=cost_per_chunk,
+        )
+        return last_created_stream_response
+
+    @app.get("/v1/stream-sync")
+    def stream_sync_tokens(
+        total_chunks: int,
+        cost_per_chunk: int,
+        meter: Annotated[MeteredSettlementContext, Depends(upto_stream_dependency)],
+    ) -> PayGateStreamingUptoResponse:
+        sync_chunks: list[str | bytes] = [
+            b"sync-1" if idx == 1 else f"sync-{idx}" for idx in range(1, total_chunks + 1)
+        ]
+        return PayGateStreamingUptoResponse(
+            chunk_stream=sync_chunks,
+            meter=meter,
+            atomic_cost_per_chunk=cost_per_chunk,
+        )
+
+    # Validate non-positive atomic_cost_per_chunk raises ValueError
+    dummy_meter = MeteredSettlementContext(
+        payment_payload=make_signed_payload(streaming_requirement),
+        requirement=streaming_requirement,
+        response=Response(),
+        verifier=UptoVerifier(),
+    )
+    with pytest.raises(ValueError, match="positive integer"):
+        PayGateStreamingUptoResponse(
+            chunk_stream=["tok"],
+            meter=dummy_meter,
+            atomic_cost_per_chunk=0,
+        )
+
+    policy_guard = SpendPolicyGuard(
+        max_per_call=1_000_000,
+        max_budget=5_000_000,
+        payer_address=TEST_PAYER_ADDRESS,
+        current_ledger=500_000,
+    )
+    async_client = wrap_httpx_with_paygate(
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://paygate-stream.local",
+        ),
+        policy_guard,
+    )
+
+    # 1. Normal completion below ceiling (3 chunks * 100,000 = 300,000 <= 500,000 ceiling)
+    normal_res = await async_client.get("/v1/stream-async?total_chunks=3&cost_per_chunk=100000")
+    assert normal_res.status_code == 200
+    assert "text/event-stream" in normal_res.headers["content-type"]
+    normal_body = normal_res.text
+    assert "data: token-1" in normal_body
+    assert "data: token-2" in normal_body
+    assert "data: token-3" in normal_body
+    assert "event: paygate-ceiling-reached" not in normal_body
+    assert "event: paygate-receipt" in normal_body
+    assert '"settledAmount":"300000"' in normal_body
+    assert last_created_stream_response is not None
+    assert last_created_stream_response.accumulated_cost_stroops == 300_000
+    assert last_created_stream_response.ceiling_cutoff_triggered is False
+
+    # 2. Automatic ceiling cutoff (10 * 150,000 vs 500,000 ceiling -> halts at 3 chunks = 450,000)
+    # Advance client ledger by 1 so the second distinct streaming call signs a new ledger window
+    policy_guard.current_ledger = 500_001
+    cutoff_res = await async_client.get("/v1/stream-async?total_chunks=10&cost_per_chunk=150000")
+    assert cutoff_res.status_code == 200
+    cutoff_body = cutoff_res.text
+    assert "data: token-1" in cutoff_body
+    assert "data: token-2" in cutoff_body
+    assert "data: token-3" in cutoff_body
+    assert "data: token-4" not in cutoff_body
+    assert "event: paygate-ceiling-reached" in cutoff_body
+    assert "event: paygate-receipt" in cutoff_body
+    assert '"settledAmount":"450000"' in cutoff_body
+    assert last_created_stream_response.accumulated_cost_stroops == 450_000
+    assert last_created_stream_response.delivered_chunk_count == 3
+    assert last_created_stream_response.ceiling_cutoff_triggered is True
+
+    # 3. Synchronous iterable chunk stream (2 chunks * 120,000 = 240,000)
+    policy_guard.current_ledger = 500_002
+    sync_stream_res = await async_client.get("/v1/stream-sync?total_chunks=2&cost_per_chunk=120000")
+    assert sync_stream_res.status_code == 200
+    assert "data: sync-1" in sync_stream_res.text
+    assert "data: sync-2" in sync_stream_res.text
+    assert '"settledAmount":"240000"' in sync_stream_res.text
+
+    # 4. Mid-stream partial disconnect settles only the delivered chunks in finally block
+    partial_payload = make_signed_payload(
+        streaming_requirement,
+        ledger=500_004,
+        expiration_ledger=500_016,
+    )
+    partial_meter = MeteredSettlementContext(
+        payment_payload=partial_payload,
+        requirement=streaming_requirement,
+        response=Response(),
+        verifier=UptoVerifier(),
+        current_ledger=500_000,
+    )
+    partial_stream = PayGateStreamingUptoResponse(
+        chunk_stream=["part-1", "part-2", "part-3", "part-4"],
+        meter=partial_meter,
+        atomic_cost_per_chunk=100_000,
+    )
+    stream_generator = partial_stream._meter_and_format_sse_stream(
+        ["part-1", "part-2", "part-3", "part-4"]
+    )
+    first_frame = await stream_generator.__anext__()
+    second_frame = await stream_generator.__anext__()
+    assert "part-1" in first_frame
+    assert "part-2" in second_frame
+    # Close generator mid-stream after 2 chunks (200,000 stroops)
+    if hasattr(stream_generator, "aclose"):
+        await stream_generator.aclose()
+    assert partial_meter.last_settlement is not None
+    assert partial_meter.last_settlement.settled_amount == "200000"
+
     await async_client.aclose()
