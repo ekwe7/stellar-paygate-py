@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 
 import httpx
@@ -12,6 +13,7 @@ from stellar_paygate.client import (
     PaygateAsyncTransport,
     PaygateSyncTransport,
     SpendPolicyGuard,
+    SqliteIdempotencyStore,
     atomic_units_to_decimal,
     compute_request_fingerprint,
     decimal_to_atomic_units,
@@ -539,3 +541,167 @@ def test_sync_transport_stops_if_retry_returns_402_and_cached_fingerprint_reuse(
     assert isinstance(sync_transport, PaygateSyncTransport)
     assert PaygateAsyncTransport is not None
     http_client.close()
+
+
+def test_sqlite_idempotency_store_cross_restart_persistence_and_pruning(
+    tmp_path: Path,
+) -> None:
+    """Verify SqliteIdempotencyStore persists payloads across agent restarts and prunes expired."""
+    sqlite_database_file: Path = tmp_path / "paygate_audit.sqlite3"
+    request_fingerprint: str = compute_request_fingerprint(
+        http_method="POST",
+        request_url="https://api.example.com/v1/report",
+        request_body=b'{"query": "stellar"}',
+    )
+    payment_payload = build_test_payment_payload(
+        amount="850000",
+        ledger=500_000,
+        expiration_ledger=500_010,
+    )
+
+    # 1. Agent Process 1 reserves 850,000 stroops and saves in-flight payload to SQLite
+    first_store = SqliteIdempotencyStore(sqlite_database_file)
+    first_guard = SpendPolicyGuard(
+        max_per_call=2_000_000,
+        max_budget=5_000_000,
+        current_ledger=500_000,
+        idempotency_store=first_store,
+    )
+    first_guard.check(payment_payload, request_fingerprint=request_fingerprint)
+    assert first_guard.consumed_budget == 850_000
+    first_store.close()
+
+    # 2. Simulate agent process restart at ledger 500_005 (before expiration 500_010)
+    restarted_store = SqliteIdempotencyStore(sqlite_database_file)
+    restarted_guard = SpendPolicyGuard(
+        max_per_call=2_000_000,
+        max_budget=5_000_000,
+        current_ledger=500_005,
+        idempotency_store=restarted_store,
+    )
+    assert restarted_guard.consumed_budget == 850_000
+
+    restored_payload = restarted_guard.get_cached_payload(request_fingerprint)
+    assert restored_payload == payment_payload
+
+    # Re-checking the same request_fingerprint after restart does NOT double-deduct
+    restarted_guard.check(payment_payload, request_fingerprint=request_fingerprint)
+    assert restarted_guard.consumed_budget == 850_000
+
+    # Record settlement hash and verify receipt audit lookup
+    settled_tx_hash = "B" * 64
+    restarted_guard.record_settlement_receipt(request_fingerprint, settled_tx_hash)
+    assert restarted_store.get_settlement_hash(request_fingerprint) == settled_tx_hash
+
+    # Add a second unsettled record that expires at ledger 500_008
+    expiring_fingerprint = "expiring_unsettled_request"
+    expiring_payload = build_test_payment_payload(
+        amount="400000",
+        ledger=500_005,
+        expiration_ledger=500_008,
+    )
+    restarted_guard.check(expiring_payload, request_fingerprint=expiring_fingerprint)
+    assert restarted_guard.consumed_budget == 1_250_000
+
+    # Advance ledger to 500_009: get_unexpired_payload prunes expired record
+    restarted_guard.current_ledger = 500_009
+    restarted_guard._inflight_payload_cache.clear()
+    assert restarted_guard.get_cached_payload(expiring_fingerprint) is None
+
+    # Release reservation directly from SQLite when memory cache is empty
+    another_fingerprint = "rollback_from_sqlite_only"
+    another_payload = build_test_payment_payload(
+        amount="300000",
+        ledger=500_009,
+        expiration_ledger=500_020,
+    )
+    restarted_guard.check(another_payload, request_fingerprint=another_fingerprint)
+    restarted_guard._inflight_payload_cache.clear()
+    restarted_guard._inflight_reserved_amounts.clear()
+    restarted_guard.release_reservation(request_fingerprint=another_fingerprint)
+    assert restarted_store.get_unexpired_payload(another_fingerprint, 500_009) is None
+    assert restarted_store.get_settlement_hash("non_existent_key") is None
+    restarted_store.close()
+
+
+@pytest.mark.asyncio
+async def test_sync_and_async_transports_record_settlement_hash_in_sqlite_store(
+    tmp_path: Path,
+) -> None:
+    """Verify sync and async transports persist PAYMENT-RESPONSE tx hash into SQLite store."""
+    expected_sync_hash = "C" * 64
+    expected_async_hash = "D" * 64
+
+    def sync_handler(request: httpx.Request) -> httpx.Response:
+        if PAYMENT_SIGNATURE_HEADER not in request.headers:
+            return httpx.Response(
+                status_code=402,
+                headers={
+                    PAYMENT_REQUIRED_HEADER: build_encoded_payment_required_header(amount="500000")
+                },
+            )
+        receipt = SettlementResponse(
+            success=True,
+            scheme="exact",
+            network="stellar:testnet",
+            payer=SAMPLE_PAYER_ADDRESS,
+            transaction_hash=expected_sync_hash,
+            settled_amount="500000",
+        )
+        return httpx.Response(
+            status_code=200,
+            headers={PAYMENT_RESPONSE_HEADER: encode_payment_response(receipt)},
+            json={"paid": True},
+        )
+
+    async def async_handler(request: httpx.Request) -> httpx.Response:
+        if PAYMENT_SIGNATURE_HEADER not in request.headers:
+            return httpx.Response(
+                status_code=402,
+                headers={
+                    PAYMENT_REQUIRED_HEADER: build_encoded_payment_required_header(amount="600000")
+                },
+            )
+        receipt = SettlementResponse(
+            success=True,
+            scheme="exact",
+            network="stellar:testnet",
+            payer=SAMPLE_PAYER_ADDRESS,
+            transaction_hash=expected_async_hash,
+            settled_amount="600000",
+        )
+        return httpx.Response(
+            status_code=200,
+            headers={PAYMENT_RESPONSE_HEADER: encode_payment_response(receipt)},
+            json={"async_paid": True},
+        )
+
+    sqlite_store = SqliteIdempotencyStore(tmp_path / "transport_audit.sqlite3")
+    guard = SpendPolicyGuard(
+        max_per_call=2_000_000,
+        max_budget=5_000_000,
+        idempotency_store=sqlite_store,
+    )
+
+    sync_url = "https://api.example.com/v1/sync-audit"
+    sync_client = wrap_httpx_with_paygate(
+        httpx.Client(transport=httpx.MockTransport(sync_handler)),
+        guard,
+    )
+    sync_res = sync_client.get(sync_url)
+    assert sync_res.status_code == 200
+    sync_fp = compute_request_fingerprint("GET", sync_url, b"")
+    assert sqlite_store.get_settlement_hash(sync_fp) == expected_sync_hash
+    sync_client.close()
+
+    async_url = "https://api.example.com/v1/async-audit"
+    async_client = wrap_httpx_with_paygate(
+        httpx.AsyncClient(transport=httpx.MockTransport(async_handler)),
+        guard,
+    )
+    async_res = await async_client.get(async_url)
+    assert async_res.status_code == 200
+    async_fp = compute_request_fingerprint("GET", async_url, b"")
+    assert sqlite_store.get_settlement_hash(async_fp) == expected_async_hash
+    await async_client.aclose()
+    sqlite_store.close()

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import xml.etree.ElementTree as ElementTree
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import Literal, Protocol, runtime_checkable
@@ -556,6 +557,134 @@ def format_conformance_json_report(
     return json.dumps(report_payload, indent=2)
 
 
+def format_conformance_sarif_report(
+    scenario_results: Sequence[ConformanceScenarioResult],
+) -> str:
+    """Format scenario results as a SARIF v2.1.0 JSON conformance report."""
+    sarif_rules: list[dict[str, object]] = []
+    sarif_results: list[dict[str, object]] = []
+
+    for scenario in scenario_results:
+        sarif_rules.append(
+            {
+                "id": scenario.scenario_id,
+                "name": scenario.title,
+                "shortDescription": {"text": scenario.title},
+                "fullDescription": {
+                    "text": (
+                        f"Conformance scenario {scenario.scenario_id}: {scenario.title}. "
+                        f"Expected outcome: {scenario.expected_outcome}."
+                    )
+                },
+            }
+        )
+        result_level: str = "note" if scenario.passed else "error"
+        result_kind: str = "pass" if scenario.passed else "fail"
+        sarif_results.append(
+            {
+                "ruleId": scenario.scenario_id,
+                "kind": result_kind,
+                "level": result_level,
+                "message": {
+                    "text": (
+                        f"[{scenario.scenario_id}] {scenario.title} — "
+                        f"expected='{scenario.expected_outcome}', "
+                        f"observed='{scenario.observed_outcome}'"
+                    )
+                },
+                "locations": [
+                    {
+                        "physicalLocation": {
+                            "artifactLocation": {"uri": "src/stellar_paygate/fault_harness.py"}
+                        }
+                    }
+                ],
+                "properties": {
+                    "passed": scenario.passed,
+                    "expected_outcome": scenario.expected_outcome,
+                    "observed_outcome": scenario.observed_outcome,
+                },
+            }
+        )
+
+    sarif_document: dict[str, object] = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "stellar-paygate-sim",
+                        "version": "0.1.0",
+                        "informationUri": "https://github.com/ekwe7/stellar-paygate-py",
+                        "rules": sarif_rules,
+                    }
+                },
+                "results": sarif_results,
+            }
+        ],
+    }
+    return json.dumps(sarif_document, indent=2)
+
+
+def format_conformance_junit_report(
+    scenario_results: Sequence[ConformanceScenarioResult],
+) -> str:
+    """Format scenario results as a JUnit XML test suite document."""
+    total_count: int = len(scenario_results)
+    failed_count: int = sum(1 for item in scenario_results if not item.passed)
+
+    testsuites_element = ElementTree.Element(
+        "testsuites",
+        attrib={
+            "name": "stellar-paygate-sim",
+            "tests": str(total_count),
+            "failures": str(failed_count),
+        },
+    )
+    testsuite_element = ElementTree.SubElement(
+        testsuites_element,
+        "testsuite",
+        attrib={
+            "name": "stellar_paygate.conformance",
+            "tests": str(total_count),
+            "failures": str(failed_count),
+        },
+    )
+
+    for scenario in scenario_results:
+        testcase_element = ElementTree.SubElement(
+            testsuite_element,
+            "testcase",
+            attrib={
+                "classname": "stellar_paygate.fault_harness",
+                "name": f"{scenario.scenario_id}: {scenario.title}",
+            },
+        )
+        if not scenario.passed:
+            failure_element = ElementTree.SubElement(
+                testcase_element,
+                "failure",
+                attrib={
+                    "type": "ConformanceFailure",
+                    "message": (
+                        f"Expected '{scenario.expected_outcome}', got '{scenario.observed_outcome}'"
+                    ),
+                },
+            )
+            failure_element.text = (
+                f"Scenario {scenario.scenario_id} ({scenario.title}) failed.\n"
+                f"Expected: {scenario.expected_outcome}\n"
+                f"Observed: {scenario.observed_outcome}"
+            )
+
+    xml_body: str = ElementTree.tostring(
+        testsuites_element,
+        encoding="unicode",
+    )
+    return f'<?xml version="1.0" encoding="utf-8"?>\n{xml_body}'
+
+
 def build_simulation_argument_parser() -> argparse.ArgumentParser:
     """Construct the CLI argument parser for ``stellar-paygate-sim``."""
     parser = argparse.ArgumentParser(
@@ -566,10 +695,17 @@ def build_simulation_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--format",
+        choices=("markdown", "json", "sarif", "junit"),
+        default="markdown",
+        dest="output_format",
+        help="Report format to emit: markdown (default), json, sarif (v2.1.0), or junit (XML).",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         dest="emit_json",
-        help="Emit a structured JSON conformance report instead of a Markdown table.",
+        help="Alias for '--format json'. Emit a structured JSON conformance report.",
     )
     return parser
 
@@ -592,8 +728,15 @@ def main(command_line_arguments: Sequence[str] | None = None) -> int:
     scenario_results: list[ConformanceScenarioResult] = run_conformance_scenarios()
     all_scenarios_passed: bool = all(item.passed for item in scenario_results)
 
-    if parsed_arguments.emit_json:
+    selected_format: str = (
+        "json" if parsed_arguments.emit_json else str(parsed_arguments.output_format)
+    )
+    if selected_format == "json":
         sys.stdout.write(f"{format_conformance_json_report(scenario_results)}\n")
+    elif selected_format == "sarif":
+        sys.stdout.write(f"{format_conformance_sarif_report(scenario_results)}\n")
+    elif selected_format == "junit":
+        sys.stdout.write(f"{format_conformance_junit_report(scenario_results)}\n")
     else:
         sys.stdout.write(f"{format_conformance_markdown_report(scenario_results)}\n")
 
@@ -613,5 +756,7 @@ __all__ = [
     "run_conformance_scenarios",
     "format_conformance_markdown_report",
     "format_conformance_json_report",
+    "format_conformance_sarif_report",
+    "format_conformance_junit_report",
     "main",
 ]

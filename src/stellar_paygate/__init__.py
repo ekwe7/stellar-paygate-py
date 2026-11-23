@@ -11,6 +11,7 @@ from .client import (
     PaygateAsyncTransport,
     PaygateSyncTransport,
     SpendPolicyGuard,
+    SqliteIdempotencyStore,
     atomic_units_to_decimal,
     compute_request_fingerprint,
     decimal_to_atomic_units,
@@ -51,6 +52,10 @@ from .fault_harness import (
     FaultInjectingSorobanRpc,
     QuorumSorobanRpcAdapter,
     SorobanRpcReaderPort,
+    format_conformance_json_report,
+    format_conformance_junit_report,
+    format_conformance_markdown_report,
+    format_conformance_sarif_report,
     run_conformance_scenarios,
 )
 from .types import (
@@ -98,6 +103,7 @@ __all__ = [
     "verify_payload",
     "settle_payload",
     # Client policy guard & HTTPX transports
+    "SqliteIdempotencyStore",
     "SpendPolicyGuard",
     "PaygateSyncTransport",
     "PaygateAsyncTransport",
@@ -117,6 +123,10 @@ __all__ = [
     "FaultInjectingSorobanRpc",
     "QuorumSorobanRpcAdapter",
     "run_conformance_scenarios",
+    "format_conformance_markdown_report",
+    "format_conformance_json_report",
+    "format_conformance_sarif_report",
+    "format_conformance_junit_report",
     # Codec helpers
     "PAYMENT_REQUIRED_HEADER",
     "PAYMENT_SIGNATURE_HEADER",

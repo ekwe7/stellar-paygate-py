@@ -10,15 +10,19 @@ from __future__ import annotations
 
 import hashlib
 import math
+import sqlite3
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import TypeVar
 
 import httpx
 
 from .codec import (
     PAYMENT_REQUIRED_HEADER,
+    PAYMENT_RESPONSE_HEADER,
     PAYMENT_SIGNATURE_HEADER,
     decode_payment_required,
+    decode_payment_response,
     encode_payment_signature,
 )
 from .types import (
@@ -146,6 +150,178 @@ def compute_request_fingerprint(
     return hasher.hexdigest()
 
 
+class SqliteIdempotencyStore:
+    """SQLite-backed persistent in-flight payload and settlement receipt audit store.
+
+    Persists ``(request_fingerprint, payment_payload_json, reserved_atomic_amount,
+    expiration_ledger, settled_transaction_hash)`` using Python's standard library
+    :mod:`sqlite3` so autonomous agents survive process restarts mid-request
+    without signing or paying a second time.
+    """
+
+    def __init__(self, database_path: str | Path = ":memory:") -> None:
+        self.database_path: str = str(database_path)
+        self._connection: sqlite3.Connection = sqlite3.connect(
+            self.database_path,
+            check_same_thread=False,
+        )
+        self._initialize_schema()
+
+    def _initialize_schema(self) -> None:
+        with self._connection:
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS paygate_idempotency_records (
+                    request_fingerprint TEXT PRIMARY KEY,
+                    payment_payload_json TEXT NOT NULL,
+                    reserved_atomic_amount INTEGER NOT NULL,
+                    expiration_ledger INTEGER NOT NULL,
+                    settled_transaction_hash TEXT
+                )
+                """
+            )
+
+    def save_inflight_payload(
+        self,
+        request_fingerprint: str,
+        payment_payload: PaymentPayload,
+        reserved_atomic_amount: int,
+    ) -> None:
+        """Persist or update an in-flight PaymentPayload reservation."""
+        payload_json: str = payment_payload.model_dump_json(
+            by_alias=True,
+            exclude_none=True,
+        )
+        expiration_ledger: int = payment_payload.payload.expiration_ledger
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO paygate_idempotency_records (
+                    request_fingerprint,
+                    payment_payload_json,
+                    reserved_atomic_amount,
+                    expiration_ledger,
+                    settled_transaction_hash
+                ) VALUES (?, ?, ?, ?, NULL)
+                ON CONFLICT(request_fingerprint) DO UPDATE SET
+                    payment_payload_json = excluded.payment_payload_json,
+                    reserved_atomic_amount = excluded.reserved_atomic_amount,
+                    expiration_ledger = excluded.expiration_ledger
+                """,
+                (
+                    request_fingerprint,
+                    payload_json,
+                    reserved_atomic_amount,
+                    expiration_ledger,
+                ),
+            )
+
+    def get_unexpired_payload(
+        self,
+        request_fingerprint: str,
+        current_ledger: int,
+    ) -> tuple[PaymentPayload, int] | None:
+        """Return an unexpired ``(PaymentPayload, reserved_atomic_amount)`` or prune if expired."""
+        cursor = self._connection.execute(
+            """
+            SELECT payment_payload_json, reserved_atomic_amount, expiration_ledger
+            FROM paygate_idempotency_records
+            WHERE request_fingerprint = ?
+            """,
+            (request_fingerprint,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+
+        payload_json_str, reserved_amount_int, expiration_ledger_int = row
+        if int(expiration_ledger_int) <= current_ledger:
+            self.delete_record(request_fingerprint)
+            return None
+
+        restored_payload: PaymentPayload = PaymentPayload.model_validate_json(str(payload_json_str))
+        return restored_payload, int(reserved_amount_int)
+
+    def record_settlement_hash(
+        self,
+        request_fingerprint: str,
+        transaction_hash: str,
+    ) -> None:
+        """Record the confirmed on-chain transaction hash for a settled request."""
+        with self._connection:
+            self._connection.execute(
+                """
+                UPDATE paygate_idempotency_records
+                SET settled_transaction_hash = ?
+                WHERE request_fingerprint = ?
+                """,
+                (transaction_hash, request_fingerprint),
+            )
+
+    def get_settlement_hash(self, request_fingerprint: str) -> str | None:
+        """Retrieve the recorded settlement transaction hash for a request fingerprint."""
+        cursor = self._connection.execute(
+            """
+            SELECT settled_transaction_hash
+            FROM paygate_idempotency_records
+            WHERE request_fingerprint = ?
+            """,
+            (request_fingerprint,),
+        )
+        row = cursor.fetchone()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
+
+    def delete_record(self, request_fingerprint: str) -> int | None:
+        """Delete a reservation record and return its reserved atomic amount if present."""
+        cursor = self._connection.execute(
+            """
+            SELECT reserved_atomic_amount
+            FROM paygate_idempotency_records
+            WHERE request_fingerprint = ?
+            """,
+            (request_fingerprint,),
+        )
+        row = cursor.fetchone()
+        with self._connection:
+            self._connection.execute(
+                "DELETE FROM paygate_idempotency_records WHERE request_fingerprint = ?",
+                (request_fingerprint,),
+            )
+        if row is None:
+            return None
+        return int(row[0])
+
+    def prune_expired_records(self, current_ledger: int) -> int:
+        """Delete all unsettled records whose expiration_ledger <= current_ledger."""
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                DELETE FROM paygate_idempotency_records
+                WHERE expiration_ledger <= ? AND settled_transaction_hash IS NULL
+                """,
+                (current_ledger,),
+            )
+            return cursor.rowcount
+
+    def total_active_reserved_amount(self, current_ledger: int) -> int:
+        """Compute total reserved atomic units across all unexpired or settled records."""
+        self.prune_expired_records(current_ledger)
+        cursor = self._connection.execute(
+            """
+            SELECT COALESCE(SUM(reserved_atomic_amount), 0)
+            FROM paygate_idempotency_records
+            """
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row is not None and row[0] is not None else 0
+
+    def close(self) -> None:
+        """Close the underlying SQLite connection."""
+        self._connection.close()
+
+
 class SpendPolicyGuard:
     """Exact-integer spend policy guard with rolling budget and in-flight retry cache."""
 
@@ -157,6 +333,7 @@ class SpendPolicyGuard:
         allowed_assets: set[str] | frozenset[str] | None = None,
         payer_address: str = DEFAULT_PAYER_ADDRESS,
         current_ledger: int = DEFAULT_CLIENT_LEDGER,
+        idempotency_store: SqliteIdempotencyStore | None = None,
     ) -> None:
         if max_per_call <= 0:
             raise ValueError("max_per_call must be a positive integer")
@@ -165,7 +342,6 @@ class SpendPolicyGuard:
 
         self.max_per_call: int = max_per_call
         self.max_budget: int = max_budget
-        self.consumed_budget: int = 0
         self.allowed_networks: frozenset[str] | None = (
             frozenset(allowed_networks) if allowed_networks is not None else None
         )
@@ -174,8 +350,14 @@ class SpendPolicyGuard:
         )
         self.payer_address: str = payer_address
         self.current_ledger: int = current_ledger
+        self.idempotency_store: SqliteIdempotencyStore | None = idempotency_store
         self._inflight_payload_cache: dict[str, PaymentPayload] = {}
         self._inflight_reserved_amounts: dict[str, int] = {}
+        self.consumed_budget: int = (
+            idempotency_store.total_active_reserved_amount(current_ledger)
+            if idempotency_store is not None
+            else 0
+        )
 
     @property
     def remaining_budget(self) -> int:
@@ -191,14 +373,13 @@ class SpendPolicyGuard:
 
         Deducts the approved atomic amount from ``consumed_budget``. When
         ``request_fingerprint`` is provided and matches an active in-flight
-        reservation, the cached approval is reused without double-deducting.
+        reservation (in memory or in ``idempotency_store``), the cached approval
+        is reused without double-deducting.
         """
-        if request_fingerprint is not None and request_fingerprint in self._inflight_payload_cache:
-            cached_payload = self._inflight_payload_cache[request_fingerprint]
-            if cached_payload.payload.expiration_ledger > self.current_ledger:
+        if request_fingerprint is not None:
+            existing_cached = self.get_cached_payload(request_fingerprint)
+            if existing_cached is not None:
                 return
-            self._inflight_payload_cache.pop(request_fingerprint, None)
-            self._inflight_reserved_amounts.pop(request_fingerprint, None)
 
         requirement: PaymentRequirement = payload.requirement
 
@@ -233,19 +414,48 @@ class SpendPolicyGuard:
         if request_fingerprint is not None:
             self._inflight_payload_cache[request_fingerprint] = payload
             self._inflight_reserved_amounts[request_fingerprint] = atomic_amount
+            if self.idempotency_store is not None:
+                self.idempotency_store.save_inflight_payload(
+                    request_fingerprint=request_fingerprint,
+                    payment_payload=payload,
+                    reserved_atomic_amount=atomic_amount,
+                )
 
     def get_cached_payload(self, request_fingerprint: str) -> PaymentPayload | None:
-        """Retrieve an unexpired in-flight PaymentPayload for a request fingerprint."""
+        """Retrieve an unexpired in-flight PaymentPayload from memory or SQLite store."""
         cached_payload: PaymentPayload | None = self._inflight_payload_cache.get(
             request_fingerprint
         )
-        if cached_payload is None:
-            return None
-        if cached_payload.payload.expiration_ledger <= self.current_ledger:
+        if cached_payload is not None:
+            if cached_payload.payload.expiration_ledger > self.current_ledger:
+                return cached_payload
             self._inflight_payload_cache.pop(request_fingerprint, None)
             self._inflight_reserved_amounts.pop(request_fingerprint, None)
-            return None
-        return cached_payload
+
+        if self.idempotency_store is not None:
+            persisted_entry = self.idempotency_store.get_unexpired_payload(
+                request_fingerprint=request_fingerprint,
+                current_ledger=self.current_ledger,
+            )
+            if persisted_entry is not None:
+                restored_payload, reserved_amount = persisted_entry
+                self._inflight_payload_cache[request_fingerprint] = restored_payload
+                self._inflight_reserved_amounts[request_fingerprint] = reserved_amount
+                return restored_payload
+
+        return None
+
+    def record_settlement_receipt(
+        self,
+        request_fingerprint: str,
+        transaction_hash: str | None,
+    ) -> None:
+        """Record a settled transaction hash in the persistent SQLite audit store."""
+        if self.idempotency_store is not None and transaction_hash is not None:
+            self.idempotency_store.record_settlement_hash(
+                request_fingerprint=request_fingerprint,
+                transaction_hash=transaction_hash,
+            )
 
     def release_reservation(
         self,
@@ -261,6 +471,10 @@ class SpendPolicyGuard:
             )
             if reserved_for_key is not None:
                 amount_to_release = reserved_for_key
+            if self.idempotency_store is not None:
+                persisted_reserved = self.idempotency_store.delete_record(request_fingerprint)
+                if amount_to_release == 0 and persisted_reserved is not None:
+                    amount_to_release = persisted_reserved
 
         if atomic_amount is not None and amount_to_release == 0:
             if atomic_amount < 0:
@@ -392,11 +606,23 @@ class PaygateSyncTransport(httpx.BaseTransport):
         )
 
         try:
-            return self.inner_transport.handle_request(retry_request)
+            retry_response: httpx.Response = self.inner_transport.handle_request(retry_request)
         except httpx.TransportError:
             if not was_already_cached:
                 self.guard.release_reservation(request_fingerprint=request_fingerprint)
             raise
+
+        receipt_header_value: str | None = retry_response.headers.get(PAYMENT_RESPONSE_HEADER)
+        if receipt_header_value:
+            try:
+                decoded_receipt = decode_payment_response(receipt_header_value)
+                self.guard.record_settlement_receipt(
+                    request_fingerprint=request_fingerprint,
+                    transaction_hash=decoded_receipt.transaction_hash,
+                )
+            except PaygateProtocolError:
+                pass
+        return retry_response
 
     def close(self) -> None:
         """Close the wrapped synchronous transport."""
@@ -449,11 +675,25 @@ class PaygateAsyncTransport(httpx.AsyncBaseTransport):
         )
 
         try:
-            return await self.inner_transport.handle_async_request(retry_request)
+            retry_response: httpx.Response = await self.inner_transport.handle_async_request(
+                retry_request
+            )
         except httpx.TransportError:
             if not was_already_cached:
                 self.guard.release_reservation(request_fingerprint=request_fingerprint)
             raise
+
+        receipt_header_value: str | None = retry_response.headers.get(PAYMENT_RESPONSE_HEADER)
+        if receipt_header_value:
+            try:
+                decoded_receipt = decode_payment_response(receipt_header_value)
+                self.guard.record_settlement_receipt(
+                    request_fingerprint=request_fingerprint,
+                    transaction_hash=decoded_receipt.transaction_hash,
+                )
+            except PaygateProtocolError:
+                pass
+        return retry_response
 
     async def aclose(self) -> None:
         """Close the wrapped asynchronous transport."""
@@ -492,6 +732,7 @@ def wrap_httpx_with_paygate(client: ClientT, guard: SpendPolicyGuard) -> ClientT
 
 
 __all__ = [
+    "SqliteIdempotencyStore",
     "SpendPolicyGuard",
     "PaygateSyncTransport",
     "PaygateAsyncTransport",
