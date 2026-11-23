@@ -236,6 +236,7 @@ Located in `stellar_paygate.types`:
 
 | Symbol | Type | Description |
 | :--- | :--- | :--- |
+| `__version__` | `str` | Package release version string (`"0.2.0"`). |
 | `Scheme` | `StrEnum` | Payment scheme: `exact` (fixed price) or `upto` (metered ceiling). |
 | `FeeMode` | `StrEnum` | Fee sponsorship: `sponsored` or `unsponsored`. |
 | `PayGateErrorCode` | `StrEnum` | Canonical error taxonomy codes (`invalid_header`, `amount_mismatch`, etc.). |

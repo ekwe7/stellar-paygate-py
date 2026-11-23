@@ -91,6 +91,7 @@ def build_test_payment_payload(
 
 def build_encoded_payment_required_header(
     amount: str = "1000000",
+    scheme: Literal["exact", "upto"] = "exact",
     network: str = "stellar:testnet",
     asset: str = SAMPLE_ASSET_CONTRACT,
     are_fees_sponsored: bool = True,
@@ -104,6 +105,7 @@ def build_encoded_payment_required_header(
         accepts=[
             build_test_payment_requirement(
                 amount=amount,
+                scheme=scheme,
                 network=network,
                 asset=asset,
                 are_fees_sponsored=are_fees_sponsored,
@@ -704,4 +706,105 @@ async def test_sync_and_async_transports_record_settlement_hash_in_sqlite_store(
     async_fp = compute_request_fingerprint("GET", async_url, b"")
     assert sqlite_store.get_settlement_hash(async_fp) == expected_async_hash
     await async_client.aclose()
+    sqlite_store.close()
+
+
+@pytest.mark.asyncio
+async def test_upto_ceiling_rebate_reconciliation_in_guard_and_transports(
+    tmp_path: Path,
+) -> None:
+    """Verify upto ceiling reservation refunds unused headroom on partial settlement."""
+    sqlite_store = SqliteIdempotencyStore(tmp_path / "upto_rebate.sqlite3")
+    guard = SpendPolicyGuard(
+        max_per_call=2_000_000,
+        max_budget=3_000_000,
+        idempotency_store=sqlite_store,
+    )
+
+    def sync_upto_handler(request: httpx.Request) -> httpx.Response:
+        if PAYMENT_SIGNATURE_HEADER not in request.headers:
+            return httpx.Response(
+                status_code=402,
+                headers={
+                    PAYMENT_REQUIRED_HEADER: build_encoded_payment_required_header(
+                        amount="1000000",
+                        scheme="upto",
+                    )
+                },
+            )
+        receipt = SettlementResponse(
+            success=True,
+            scheme="upto",
+            network="stellar:testnet",
+            payer=SAMPLE_PAYER_ADDRESS,
+            transaction_hash="E" * 64,
+            settled_amount="150000",
+        )
+        return httpx.Response(
+            status_code=200,
+            headers={PAYMENT_RESPONSE_HEADER: encode_payment_response(receipt)},
+            json={"tokens_used": 150},
+        )
+
+    async def async_upto_handler(request: httpx.Request) -> httpx.Response:
+        if PAYMENT_SIGNATURE_HEADER not in request.headers:
+            return httpx.Response(
+                status_code=402,
+                headers={
+                    PAYMENT_REQUIRED_HEADER: build_encoded_payment_required_header(
+                        amount="1000000",
+                        scheme="upto",
+                    )
+                },
+            )
+        receipt = SettlementResponse(
+            success=True,
+            scheme="upto",
+            network="stellar:testnet",
+            payer=SAMPLE_PAYER_ADDRESS,
+            transaction_hash="F" * 64,
+            settled_amount="250000",
+        )
+        return httpx.Response(
+            status_code=200,
+            headers={PAYMENT_RESPONSE_HEADER: encode_payment_response(receipt)},
+            json={"tokens_used": 250},
+        )
+
+    # 1. Sync upto request reserves 1,000,000 ceiling, settles 150,000 -> 850,000 rebated
+    sync_client = wrap_httpx_with_paygate(
+        httpx.Client(transport=httpx.MockTransport(sync_upto_handler)),
+        guard,
+    )
+    sync_response = sync_client.get("https://api.example.com/v1/upto-sync")
+    assert sync_response.status_code == 200
+    assert guard.consumed_budget == 150_000
+    assert guard.remaining_budget == 2_850_000
+    sync_client.close()
+
+    # 2. Async upto request reserves 1,000,000 ceiling, settles 250,000 -> total consumed 400,000
+    async_client = wrap_httpx_with_paygate(
+        httpx.AsyncClient(transport=httpx.MockTransport(async_upto_handler)),
+        guard,
+    )
+    async_response = await async_client.get("https://api.example.com/v1/upto-async")
+    assert async_response.status_code == 200
+    assert guard.consumed_budget == 400_000
+    assert sqlite_store.total_active_reserved_amount(guard.current_ledger) == 400_000
+    await async_client.aclose()
+
+    # 3. Edge cases for reconcile_settled_amount (None, bool, non-numeric, negative, unknown key)
+    sync_fp = compute_request_fingerprint("GET", "https://api.example.com/v1/upto-sync", b"")
+    assert guard.reconcile_settled_amount(sync_fp, None) == 0
+    assert guard.reconcile_settled_amount(sync_fp, True) == 0
+    assert guard.reconcile_settled_amount(sync_fp, "not-a-number") == 0
+    assert guard.reconcile_settled_amount(sync_fp, 0) == 0
+    assert guard.reconcile_settled_amount(sync_fp, 200_000) == 0
+    assert guard.reconcile_settled_amount("unknown_fingerprint", 100) == 0
+
+    # Reconcile when in-memory cache is cleared (falls back to SQLite store)
+    guard._inflight_reserved_amounts.clear()
+    rebate_from_sqlite = guard.reconcile_settled_amount(sync_fp, 100_000)
+    assert rebate_from_sqlite == 50_000
+    assert guard.consumed_budget == 350_000
     sqlite_store.close()

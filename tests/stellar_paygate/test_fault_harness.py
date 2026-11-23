@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import xml.etree.ElementTree as ElementTree
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -351,9 +352,10 @@ def test_quorum_soroban_rpc_adapter_reader_timeout_failover() -> None:
 def test_fault_harness_sarif_and_junit_exporters(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """Verify SARIF v2.1.0 and JUnit XML exporters via CLI --format and direct functions."""
-    # 1. CLI --format sarif
+    """Verify SARIF v2.1.0 and JUnit XML exporters via CLI flags and file output."""
+    # 1. CLI --format sarif and --sarif shorthand
     sarif_exit_code: int = fault_harness_main(["--format", "sarif"])
     assert sarif_exit_code == 0
     sarif_stdout: str = capsys.readouterr().out
@@ -364,13 +366,19 @@ def test_fault_harness_sarif_and_junit_exporters(
     sarif_run = sarif_document["runs"][0]
     driver_info = sarif_run["tool"]["driver"]
     assert driver_info["name"] == "stellar-paygate-sim"
+    assert driver_info["version"] == "0.2.0"
     assert len(driver_info["rules"]) == 10
     assert len(sarif_run["results"]) == 10
     for result_entry in sarif_run["results"]:
         assert result_entry["kind"] == "pass"
         assert result_entry["level"] == "note"
 
-    # 2. CLI --format junit
+    sarif_output_file = tmp_path / "reports" / "conformance.sarif"
+    assert fault_harness_main(["--sarif", "--output", str(sarif_output_file)]) == 0
+    assert sarif_output_file.exists()
+    assert json.loads(sarif_output_file.read_text(encoding="utf-8"))["version"] == "2.1.0"
+
+    # 2. CLI --format junit, --junit shorthand, and --junit-xml <file>
     junit_exit_code: int = fault_harness_main(["--format", "junit"])
     assert junit_exit_code == 0
     junit_stdout: str = capsys.readouterr().out
@@ -389,6 +397,14 @@ def test_fault_harness_sarif_and_junit_exporters(
     assert len(testcase_nodes) == 10
     for testcase_node in testcase_nodes:
         assert testcase_node.find("failure") is None
+
+    assert fault_harness_main(["--junit"]) == 0
+    assert capsys.readouterr().out.startswith('<?xml version="1.0" encoding="utf-8"?>')
+
+    junit_xml_file = tmp_path / "junit" / "report.xml"
+    assert fault_harness_main(["--junit-xml", str(junit_xml_file)]) == 0
+    assert junit_xml_file.exists()
+    assert ElementTree.fromstring(junit_xml_file.read_text(encoding="utf-8")).tag == "testsuites"
 
     # 3. Verify failure elements in SARIF and JUnit when a scenario fails
     failed_scenario = ConformanceScenarioResult(
