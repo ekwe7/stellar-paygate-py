@@ -10,11 +10,15 @@ settlement replay protection with zero web-framework or HTTP dependencies.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
 import math
 import string
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from .types import (
@@ -789,12 +793,267 @@ class SettlementDriftTracker:
         return float(rolling_median_atomic) > maximum_non_drifting_atomic
 
 
+class OutboxSettlementState(StrEnum):
+    """Lifecycle states for an asynchronous pending-settlement outbox record."""
+
+    VERIFIED = "VERIFIED"
+    SUBMITTED = "SUBMITTED"
+    PENDING = "PENDING"
+    SETTLED = "SETTLED"
+    DLQ = "DLQ"
+
+
+@dataclass
+class OutboxEntry:
+    """In-memory state machine record tracked by :class:`SettlementOutboxManager`."""
+
+    payload_fingerprint: str
+    state: OutboxSettlementState
+    attempts: int = 0
+    settlement_response: SettleResponse | None = None
+    last_error: str | None = None
+    history: list[OutboxSettlementState] = field(default_factory=list)
+
+
+RpcSubmissionOutcome = OutboxSettlementState | SettleResponse | str
+RpcSubmissionCallback = Callable[
+    [PaymentPayload, int],
+    RpcSubmissionOutcome | Awaitable[RpcSubmissionOutcome],
+]
+
+
+class SettlementOutboxManager:
+    """Asynchronous pending-settlement outbox state machine with per-fingerprint lock coalescing.
+
+    Coalesces concurrent ``settle_async`` requests for the same signed
+    ``PaymentPayload`` using per-fingerprint :class:`asyncio.Lock` instances so
+    only a single underlying Soroban RPC submission executes. Supports
+    multi-poll ``VERIFIED -> SUBMITTED -> PENDING -> SETTLED`` transitions with
+    configurable backoff and moves exhausted or unrecoverable submissions into a
+    Dead-Letter Queue (``OutboxSettlementState.DLQ``).
+    """
+
+    def __init__(
+        self,
+        config: VerifierConfig | None = None,
+        max_poll_attempts: int = 3,
+        initial_backoff_seconds: float = 0.0,
+        rpc_submit_callback: RpcSubmissionCallback | None = None,
+    ) -> None:
+        if max_poll_attempts <= 0:
+            raise ValueError("max_poll_attempts must be a positive integer")
+        if initial_backoff_seconds < 0.0:
+            raise ValueError("initial_backoff_seconds must be non-negative")
+
+        self.config: VerifierConfig = config or VerifierConfig()
+        self.max_poll_attempts: int = max_poll_attempts
+        self.initial_backoff_seconds: float = initial_backoff_seconds
+        self.rpc_submit_callback: RpcSubmissionCallback | None = rpc_submit_callback
+        self.submission_count: int = 0
+        self._entries_by_fingerprint: dict[str, OutboxEntry] = {}
+        self._locks_by_fingerprint: dict[str, asyncio.Lock] = {}
+
+    @property
+    def dead_letter_queue(self) -> list[OutboxEntry]:
+        """Return all outbox entries currently in the Dead-Letter Queue (``DLQ``) state."""
+        return [
+            entry
+            for entry in self._entries_by_fingerprint.values()
+            if entry.state == OutboxSettlementState.DLQ
+        ]
+
+    def get_entry(self, payload_fingerprint: str) -> OutboxEntry | None:
+        """Retrieve the current :class:`OutboxEntry` for ``payload_fingerprint``."""
+        return self._entries_by_fingerprint.get(payload_fingerprint)
+
+    def _get_or_create_lock(self, payload_fingerprint: str) -> asyncio.Lock:
+        existing_lock: asyncio.Lock | None = self._locks_by_fingerprint.get(payload_fingerprint)
+        if existing_lock is None:
+            existing_lock = asyncio.Lock()
+            self._locks_by_fingerprint[payload_fingerprint] = existing_lock
+        return existing_lock
+
+    @staticmethod
+    def _record_state_transition(
+        entry: OutboxEntry,
+        next_state: OutboxSettlementState,
+    ) -> None:
+        entry.state = next_state
+        if not entry.history or entry.history[-1] != next_state:
+            entry.history.append(next_state)
+
+    async def _invoke_rpc_callback(
+        self,
+        payment_payload: PaymentPayload,
+        attempt_number: int,
+    ) -> RpcSubmissionOutcome:
+        assert self.rpc_submit_callback is not None
+        callback_result = self.rpc_submit_callback(payment_payload, attempt_number)
+        if inspect.isawaitable(callback_result):
+            return await callback_result
+        return callback_result
+
+    async def settle_async(
+        self,
+        payment_payload: PaymentPayload,
+        current_ledger: int | None = None,
+        requested_amount: int | str | None = None,
+    ) -> SettleResponse:
+        """Coalesce concurrent settlement calls and drive the outbox state machine."""
+        payload_fingerprint: str = compute_payload_fingerprint(payment_payload)
+        fingerprint_lock: asyncio.Lock = self._get_or_create_lock(payload_fingerprint)
+
+        async with fingerprint_lock:
+            existing_entry: OutboxEntry | None = self._entries_by_fingerprint.get(
+                payload_fingerprint
+            )
+            if (
+                existing_entry is not None
+                and existing_entry.settlement_response is not None
+                and existing_entry.state
+                in (OutboxSettlementState.SETTLED, OutboxSettlementState.DLQ)
+            ):
+                return existing_entry.settlement_response
+
+            verifier: VerificationPort = get_verifier_for_scheme(
+                scheme=payment_payload.requirement.scheme,
+                config=self.config,
+            )
+            verification_result: VerifyResponse = verifier.verify(
+                payment_payload=payment_payload,
+                current_ledger=current_ledger,
+                requested_amount=requested_amount,
+            )
+            if not verification_result.success:
+                failed_verify_settle = SettleResponse(
+                    success=False,
+                    scheme=payment_payload.requirement.scheme,
+                    network=payment_payload.requirement.network,
+                    payer=payment_payload.payload.payer,
+                    error_code=verification_result.error_code or PayGateErrorCode.INVALID_PAYLOAD,
+                    error_reason=verification_result.error_reason or "Payment verification failed",
+                )
+                dlq_entry = OutboxEntry(
+                    payload_fingerprint=payload_fingerprint,
+                    state=OutboxSettlementState.DLQ,
+                    attempts=0,
+                    settlement_response=failed_verify_settle,
+                    last_error=failed_verify_settle.error_reason,
+                    history=[OutboxSettlementState.DLQ],
+                )
+                self._entries_by_fingerprint[payload_fingerprint] = dlq_entry
+                return failed_verify_settle
+
+            outbox_entry = OutboxEntry(
+                payload_fingerprint=payload_fingerprint,
+                state=OutboxSettlementState.VERIFIED,
+                attempts=0,
+                history=[OutboxSettlementState.VERIFIED],
+            )
+            self._entries_by_fingerprint[payload_fingerprint] = outbox_entry
+
+            self.submission_count += 1
+            self._record_state_transition(outbox_entry, OutboxSettlementState.SUBMITTED)
+
+            if self.rpc_submit_callback is None:
+                outbox_entry.attempts = 1
+                direct_settlement: SettleResponse = verifier.settle(
+                    payment_payload=payment_payload,
+                    current_ledger=current_ledger,
+                    requested_amount=requested_amount,
+                )
+                outbox_entry.settlement_response = direct_settlement
+                if direct_settlement.success:
+                    self._record_state_transition(outbox_entry, OutboxSettlementState.SETTLED)
+                else:
+                    outbox_entry.last_error = direct_settlement.error_reason
+                    self._record_state_transition(outbox_entry, OutboxSettlementState.DLQ)
+                return direct_settlement
+
+            for attempt_number in range(1, self.max_poll_attempts + 1):
+                outbox_entry.attempts = attempt_number
+                try:
+                    outcome = await self._invoke_rpc_callback(payment_payload, attempt_number)
+                except Exception as exc:
+                    outbox_entry.last_error = str(exc)
+                    if (
+                        attempt_number < self.max_poll_attempts
+                        and self.initial_backoff_seconds > 0.0
+                    ):
+                        await asyncio.sleep(
+                            self.initial_backoff_seconds * (2 ** (attempt_number - 1))
+                        )
+                    continue
+
+                if isinstance(outcome, SettleResponse):
+                    outbox_entry.settlement_response = outcome
+                    if outcome.success:
+                        self._record_state_transition(outbox_entry, OutboxSettlementState.SETTLED)
+                    else:
+                        outbox_entry.last_error = outcome.error_reason
+                        self._record_state_transition(outbox_entry, OutboxSettlementState.DLQ)
+                    return outcome
+
+                normalized_outcome: str = (
+                    outcome.value
+                    if isinstance(outcome, OutboxSettlementState)
+                    else str(outcome).upper()
+                )
+                if normalized_outcome == OutboxSettlementState.PENDING.value:
+                    self._record_state_transition(outbox_entry, OutboxSettlementState.PENDING)
+                    if (
+                        attempt_number < self.max_poll_attempts
+                        and self.initial_backoff_seconds > 0.0
+                    ):
+                        await asyncio.sleep(
+                            self.initial_backoff_seconds * (2 ** (attempt_number - 1))
+                        )
+                    continue
+
+                if normalized_outcome == OutboxSettlementState.SETTLED.value:
+                    confirmed_settlement: SettleResponse = verifier.settle(
+                        payment_payload=payment_payload,
+                        current_ledger=current_ledger,
+                        requested_amount=requested_amount,
+                    )
+                    outbox_entry.settlement_response = confirmed_settlement
+                    if confirmed_settlement.success:
+                        self._record_state_transition(outbox_entry, OutboxSettlementState.SETTLED)
+                    else:
+                        outbox_entry.last_error = confirmed_settlement.error_reason
+                        self._record_state_transition(outbox_entry, OutboxSettlementState.DLQ)
+                    return confirmed_settlement
+
+                outbox_entry.last_error = f"Unrecoverable RPC settlement state: {outcome}"
+                break
+
+            exhausted_error_reason: str = (
+                outbox_entry.last_error
+                or f"Settlement remained PENDING after {self.max_poll_attempts} polling attempts"
+            )
+            dlq_settlement_response = SettleResponse(
+                success=False,
+                scheme=payment_payload.requirement.scheme,
+                network=payment_payload.requirement.network,
+                payer=payment_payload.payload.payer,
+                error_code=PayGateErrorCode.SETTLEMENT_FAILURE,
+                error_reason=exhausted_error_reason,
+            )
+            outbox_entry.settlement_response = dlq_settlement_response
+            outbox_entry.last_error = exhausted_error_reason
+            self._record_state_transition(outbox_entry, OutboxSettlementState.DLQ)
+            return dlq_settlement_response
+
+
 __all__ = [
     "VerifierConfig",
     "VerificationPort",
     "ExactVerifier",
     "UptoVerifier",
     "SettlementDriftTracker",
+    "OutboxSettlementState",
+    "OutboxEntry",
+    "SettlementOutboxManager",
     "is_valid_stellar_address",
     "calculate_padded_resource_fee_stroops",
     "compute_payload_fingerprint",

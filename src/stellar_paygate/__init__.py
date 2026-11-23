@@ -37,7 +37,10 @@ from .codec import (
 )
 from .exact import (
     ExactVerifier,
+    OutboxEntry,
+    OutboxSettlementState,
     SettlementDriftTracker,
+    SettlementOutboxManager,
     UptoVerifier,
     VerificationPort,
     VerifierConfig,
@@ -108,6 +111,9 @@ __all__ = [
     "ExactVerifier",
     "UptoVerifier",
     "SettlementDriftTracker",
+    "OutboxSettlementState",
+    "OutboxEntry",
+    "SettlementOutboxManager",
     "is_valid_stellar_address",
     "calculate_padded_resource_fee_stroops",
     "compute_payload_fingerprint",
