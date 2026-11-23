@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import math
 import string
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -705,11 +706,95 @@ def settle_payload(
     )
 
 
+class SettlementDriftTracker:
+    """Rolling-median settlement drift tracker for ``upto`` metered endpoints.
+
+    Tracks the rolling window of settled atomic amounts against an endpoint's
+    advertised ``typical_amount`` to detect sellers whose settled amounts
+    consistently exceed their declared typical cost by more than
+    ``drift_threshold_ratio`` (default 50%).
+    """
+
+    def __init__(
+        self,
+        drift_threshold_ratio: float = 0.50,
+        max_window_size: int = 100,
+    ) -> None:
+        if drift_threshold_ratio < 0.0:
+            raise ValueError("drift_threshold_ratio must be non-negative")
+        if max_window_size <= 0:
+            raise ValueError("max_window_size must be a positive integer")
+
+        self.drift_threshold_ratio: float = drift_threshold_ratio
+        self.max_window_size: int = max_window_size
+        self._declared_typical_by_url: dict[str, int] = {}
+        self._settled_history_by_url: dict[str, deque[int]] = {}
+
+    def record_settlement(
+        self,
+        resource_url: str,
+        declared_typical_atomic: int | str,
+        settled_atomic: int | str,
+    ) -> None:
+        """Record a single settled atomic amount for a metered resource URL."""
+        cleaned_resource_url: str = resource_url.strip()
+        if not cleaned_resource_url:
+            raise ValueError("resource_url cannot be empty")
+
+        parsed_typical_atomic: int | None = parse_positive_atomic_amount(declared_typical_atomic)
+        if parsed_typical_atomic is None:
+            raise ValueError(
+                "declared_typical_atomic must be a positive integer, "
+                f"got '{declared_typical_atomic}'"
+            )
+
+        parsed_settled_atomic: int | None = parse_positive_atomic_amount(settled_atomic)
+        if parsed_settled_atomic is None:
+            raise ValueError(f"settled_atomic must be a positive integer, got '{settled_atomic}'")
+
+        self._declared_typical_by_url[cleaned_resource_url] = parsed_typical_atomic
+        history_window: deque[int] | None = self._settled_history_by_url.get(cleaned_resource_url)
+        if history_window is None:
+            history_window = deque(maxlen=self.max_window_size)
+            self._settled_history_by_url[cleaned_resource_url] = history_window
+        history_window.append(parsed_settled_atomic)
+
+    def get_rolling_median_atomic(self, resource_url: str) -> int | None:
+        """Return the rolling median of settled atomic amounts for ``resource_url``."""
+        cleaned_resource_url: str = resource_url.strip()
+        history_window: deque[int] | None = self._settled_history_by_url.get(cleaned_resource_url)
+        if not history_window:
+            return None
+
+        sorted_amounts: list[int] = sorted(history_window)
+        sample_count: int = len(sorted_amounts)
+        middle_index: int = sample_count // 2
+        if sample_count % 2 == 1:
+            return sorted_amounts[middle_index]
+        return (sorted_amounts[middle_index - 1] + sorted_amounts[middle_index]) // 2
+
+    def is_drifting(self, resource_url: str) -> bool:
+        """Return ``True`` when the rolling median exceeds declared typical by > threshold."""
+        cleaned_resource_url: str = resource_url.strip()
+        rolling_median_atomic: int | None = self.get_rolling_median_atomic(cleaned_resource_url)
+        declared_typical_atomic: int | None = self._declared_typical_by_url.get(
+            cleaned_resource_url
+        )
+        if rolling_median_atomic is None or declared_typical_atomic is None:
+            return False
+
+        maximum_non_drifting_atomic: float = declared_typical_atomic * (
+            1.0 + self.drift_threshold_ratio
+        )
+        return float(rolling_median_atomic) > maximum_non_drifting_atomic
+
+
 __all__ = [
     "VerifierConfig",
     "VerificationPort",
     "ExactVerifier",
     "UptoVerifier",
+    "SettlementDriftTracker",
     "is_valid_stellar_address",
     "calculate_padded_resource_fee_stroops",
     "compute_payload_fingerprint",

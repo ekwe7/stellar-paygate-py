@@ -37,6 +37,7 @@ from .codec import (
 )
 from .exact import (
     ExactVerifier,
+    SettlementDriftTracker,
     UptoVerifier,
     VerificationPort,
     VerifierConfig,
@@ -67,6 +68,7 @@ from .fault_harness import (
     run_conformance_scenarios,
 )
 from .types import (
+    DiscoveryPricingExtension,
     FaultInjectionConfig,
     FeeMode,
     PayGateErrorCode,
@@ -90,6 +92,7 @@ __all__ = [
     "PayGateErrorCode",
     "PaygateProtocolError",
     "ResourceInfo",
+    "DiscoveryPricingExtension",
     "StellarExtraConfig",
     "PaymentRequirement",
     "PaymentRequired",
@@ -104,6 +107,7 @@ __all__ = [
     "VerificationPort",
     "ExactVerifier",
     "UptoVerifier",
+    "SettlementDriftTracker",
     "is_valid_stellar_address",
     "calculate_padded_resource_fee_stroops",
     "compute_payload_fingerprint",
