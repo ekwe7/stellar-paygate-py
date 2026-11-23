@@ -334,14 +334,22 @@ class SpendPolicyGuard:
         payer_address: str = DEFAULT_PAYER_ADDRESS,
         current_ledger: int = DEFAULT_CLIENT_LEDGER,
         idempotency_store: SqliteIdempotencyStore | None = None,
+        max_typical_call_atomic: int | None = None,
+        max_upto_ceiling_atomic: int | None = None,
     ) -> None:
         if max_per_call <= 0:
             raise ValueError("max_per_call must be a positive integer")
         if max_budget <= 0:
             raise ValueError("max_budget must be a positive integer")
+        if max_typical_call_atomic is not None and max_typical_call_atomic <= 0:
+            raise ValueError("max_typical_call_atomic must be a positive integer")
+        if max_upto_ceiling_atomic is not None and max_upto_ceiling_atomic <= 0:
+            raise ValueError("max_upto_ceiling_atomic must be a positive integer")
 
         self.max_per_call: int = max_per_call
         self.max_budget: int = max_budget
+        self.max_typical_call_atomic: int | None = max_typical_call_atomic
+        self.max_upto_ceiling_atomic: int | None = max_upto_ceiling_atomic
         self.allowed_networks: frozenset[str] | None = (
             frozenset(allowed_networks) if allowed_networks is not None else None
         )
@@ -396,6 +404,31 @@ class SpendPolicyGuard:
             )
 
         atomic_amount: int = parse_challenge_atomic_amount(requirement.amount)
+
+        if requirement.extra.pricing is not None:
+            typical_atomic_amount: int = parse_challenge_atomic_amount(
+                requirement.extra.pricing.typical_amount
+            )
+            if (
+                self.max_typical_call_atomic is not None
+                and typical_atomic_amount > self.max_typical_call_atomic
+            ):
+                raise PaygateProtocolError(
+                    PayGateErrorCode.AMOUNT_MISMATCH,
+                    f"Declared typical amount {typical_atomic_amount} exceeds "
+                    f"max_typical_call_atomic cap ({self.max_typical_call_atomic})",
+                )
+
+        if (
+            requirement.scheme == "upto"
+            and self.max_upto_ceiling_atomic is not None
+            and atomic_amount > self.max_upto_ceiling_atomic
+        ):
+            raise PaygateProtocolError(
+                PayGateErrorCode.EXCEEDS_MAX_UPTO,
+                f"Upto authorization ceiling {atomic_amount} exceeds "
+                f"max_upto_ceiling_atomic cap ({self.max_upto_ceiling_atomic})",
+            )
 
         if atomic_amount > self.max_per_call:
             raise PaygateProtocolError(

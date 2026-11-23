@@ -91,6 +91,17 @@ class ResourceInfo(BaseModel):
     mime_type: str | None = Field(default=None, alias="mimeType")
 
 
+class DiscoveryPricingExtension(BaseModel):
+    """Discovery catalog pricing metadata distinguishing typical cost from upto ceiling."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    model: Literal["exact", "upto"] = "upto"
+    unit: str = "request"
+    typical_amount: str = Field(..., alias="typicalAmount")
+    note: str | None = None
+
+
 class StellarExtraConfig(BaseModel):
     """Stellar‑specific configuration that lives inside ``PaymentRequirement``."""
 
@@ -100,6 +111,7 @@ class StellarExtraConfig(BaseModel):
     upto_contract: str | None = Field(default=None, alias="uptoContract")
     upto_profile: str | None = Field(default=None, alias="uptoProfile")
     max_transaction_fee_stroops: int | None = Field(default=None, alias="maxTransactionFeeStroops")
+    pricing: DiscoveryPricingExtension | None = None
 
 
 class PaymentRequirement(BaseModel):
