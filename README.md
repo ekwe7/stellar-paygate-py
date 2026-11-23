@@ -40,13 +40,15 @@ Integrating Stellar payments and per-request HTTP 402 paywalls typically require
 
 | Component | Feature | Implementation Status | Tracking |
 |-----------|---------|----------------------|----------|
-| Core SDK | Payment verification (`Paygate`, `ExactVerifier`, `UptoVerifier`) | Completed (v0.1.0) | [API Reference](docs/API_REFERENCE.md#2-verification--settlement-engine-stellar_paygateexact) |
-| Core SDK | Agent `SpendPolicyGuard` & `httpx` 402 transport | Completed (v0.1.0) | [API Reference](docs/API_REFERENCE.md#3-agent-spend-policy-guard--httpx-transport-stellar_paygateclient) |
-| Core SDK | FastAPI 402 paywall (`require_payment`, `require_upto_ceiling`) | Completed (v0.1.0) | [API Reference](docs/API_REFERENCE.md#4-fastapi-paywall-middleware--route-dependencies-stellar_paygatefastapi_ext) |
-| Core SDK | Transaction URL builder & webhook signature verification | Completed (v0.1.0) | [API Reference](docs/API_REFERENCE.md#1-sdk-client-paygate) |
-| CLI | `stellar-paygate` & `stellar-paygate-sim` (S01–S10 fault harness) | Completed (v0.1.0) | [CLI Guide](docs/GETTING_STARTED.md#2-command-line-interface-cli-quickstart) |
-| Examples | Runnable offline scripts (`examples/`) | Completed (v0.1.0) | [Examples](examples/) |
-| Documentation | API reference & quickstart guide | Completed (v0.1.0) | [Documentation](docs/GETTING_STARTED.md) |
+| Core SDK | Payment verification (`Paygate`, `ExactVerifier`, `UptoVerifier`) | Completed (v0.2.0) | [API Reference](docs/API_REFERENCE.md#2-verification--settlement-engine-stellar_paygateexact) |
+| Core SDK | Async `SettlementOutboxManager` (`VERIFIED -> SUBMITTED -> PENDING -> SETTLED \| DLQ`) & `SettlementDriftTracker` | Completed (v0.2.0) | [API Reference](docs/API_REFERENCE.md#2-verification--settlement-engine-stellar_paygateexact) |
+| Core SDK | CAP-67 4-topic muxed event scanner, multi-sig Ed25519 verifier & `FeeBumpTransactionEnvelope` support | Completed (v0.2.0) | [API Reference](docs/API_REFERENCE.md#7-codec-utilities--cryptographic-helpers) |
+| Core SDK | Agent `SpendPolicyGuard` (dual-threshold `DiscoveryPricingExtension`), `SqliteIdempotencyStore` & `httpx` 402 transport | Completed (v0.2.0) | [API Reference](docs/API_REFERENCE.md#3-agent-spend-policy-guard--httpx-transport-stellar_paygateclient) |
+| Core SDK | FastAPI 402 paywall (`require_payment`, `require_upto_ceiling`) & `PayGateStreamingUptoResponse` SSE meter | Completed (v0.2.0) | [API Reference](docs/API_REFERENCE.md#4-fastapi-paywall-middleware--route-dependencies-stellar_paygatefastapi_ext) |
+| Core SDK | Transaction URL builder & webhook signature verification | Completed (v0.2.0) | [API Reference](docs/API_REFERENCE.md#1-sdk-client-paygate) |
+| CLI & Harness | `stellar-paygate`, `stellar-paygate-sim` (`--json`, `--sarif`, `--junit-xml`) & `QuorumSorobanRpcAdapter` | Completed (v0.2.0) | [CLI Guide](docs/GETTING_STARTED.md#2-command-line-interface-cli-quickstart) |
+| Examples | Runnable offline scripts (`examples/`) | Completed (v0.2.0) | [Examples](examples/) |
+| Documentation | API reference & quickstart guide | Completed (v0.2.0) | [Documentation](docs/GETTING_STARTED.md) |
 
 ---
 
