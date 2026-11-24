@@ -147,13 +147,13 @@
 ---
 
 ## 4️⃣ Daily "Done" Gate (to be satisfied at the end of each day)
-- [ ] All tasks for the day are **implemented** (or explicitly deferred with justification). 
-- [ ] **Unit / integration tests** for the day's work exist **and pass** (`uv run pytest -q`).
-- [ ] **Static analysis** passes:
+- [x] All tasks for the day are **implemented** (or explicitly deferred with justification). 
+- [x] **Unit / integration tests** for the day's work exist **and pass** (`uv run pytest -q`).
+- [x] **Static analysis** passes:
   - `uv run ruff check src tests` → 0 issues.
   - `uv run mypy --strict src tests` → no errors.
-- [ ] **Documentation** updated to reflect new behaviour (README, tech‑design, edge‑case docs, checklist).
-- [ ] Changes are **committed** with a clear “Day X‑summary” message and pushed.
+- [x] **Documentation** updated to reflect new behaviour (README, tech‑design, edge‑case docs, checklist).
+- [x] Changes are **committed** with a clear “Day X‑summary” message and pushed.
 
 ---
 
