@@ -14,6 +14,7 @@ import sys
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
 from .codec import decode_payment_required
@@ -615,7 +616,7 @@ def format_conformance_sarif_report(
                 "tool": {
                     "driver": {
                         "name": "stellar-paygate-sim",
-                        "version": "0.1.0",
+                        "version": "0.2.0",
                         "informationUri": "https://github.com/ekwe7/stellar-paygate-py",
                         "rules": sarif_rules,
                     }
@@ -707,6 +708,31 @@ def build_simulation_argument_parser() -> argparse.ArgumentParser:
         dest="emit_json",
         help="Alias for '--format json'. Emit a structured JSON conformance report.",
     )
+    parser.add_argument(
+        "--sarif",
+        action="store_true",
+        dest="emit_sarif",
+        help="Alias for '--format sarif'. Emit a SARIF v2.1.0 conformance report.",
+    )
+    parser.add_argument(
+        "--junit",
+        action="store_true",
+        dest="emit_junit",
+        help="Alias for '--format junit'. Emit a JUnit XML conformance report.",
+    )
+    parser.add_argument(
+        "--junit-xml",
+        dest="junit_xml_path",
+        default=None,
+        help="Select JUnit XML format and write the report to the specified file path.",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        dest="output_path",
+        default=None,
+        help="Write the formatted conformance report to a file path instead of stdout.",
+    )
     return parser
 
 
@@ -728,17 +754,36 @@ def main(command_line_arguments: Sequence[str] | None = None) -> int:
     scenario_results: list[ConformanceScenarioResult] = run_conformance_scenarios()
     all_scenarios_passed: bool = all(item.passed for item in scenario_results)
 
-    selected_format: str = (
-        "json" if parsed_arguments.emit_json else str(parsed_arguments.output_format)
-    )
+    selected_format: str = str(parsed_arguments.output_format)
+    if parsed_arguments.emit_json:
+        selected_format = "json"
+    elif parsed_arguments.emit_sarif:
+        selected_format = "sarif"
+    elif parsed_arguments.emit_junit or parsed_arguments.junit_xml_path is not None:
+        selected_format = "junit"
+
     if selected_format == "json":
-        sys.stdout.write(f"{format_conformance_json_report(scenario_results)}\n")
+        rendered_report: str = format_conformance_json_report(scenario_results)
     elif selected_format == "sarif":
-        sys.stdout.write(f"{format_conformance_sarif_report(scenario_results)}\n")
+        rendered_report = format_conformance_sarif_report(scenario_results)
     elif selected_format == "junit":
-        sys.stdout.write(f"{format_conformance_junit_report(scenario_results)}\n")
+        rendered_report = format_conformance_junit_report(scenario_results)
     else:
-        sys.stdout.write(f"{format_conformance_markdown_report(scenario_results)}\n")
+        rendered_report = format_conformance_markdown_report(scenario_results)
+
+    target_output_path: str | None = (
+        str(parsed_arguments.junit_xml_path)
+        if parsed_arguments.junit_xml_path is not None
+        else (
+            str(parsed_arguments.output_path) if parsed_arguments.output_path is not None else None
+        )
+    )
+    if target_output_path is not None:
+        output_file = Path(target_output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(f"{rendered_report}\n", encoding="utf-8")
+    else:
+        sys.stdout.write(f"{rendered_report}\n")
 
     return 0 if all_scenarios_passed else 1
 

@@ -40,7 +40,11 @@ jobs:
 
       - name: Run Pytest with Coverage
         run: |
-          poetry run pytest --cov=stellar_paygate --cov-fail-under=80
+          poetry run pytest --cov=stellar_paygate --cov-fail-under=90
+
+      - name: Run Offline Conformance Simulator (stellar-paygate-sim)
+        run: |
+          poetry run stellar-paygate-sim
 
   lint:
     name: Lint

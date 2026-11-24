@@ -434,5 +434,6 @@ async def test_ac2_end_to_end_fastapi_and_httpx_conformance() -> None:
         decode_payment_response(upto_res.headers[PAYMENT_RESPONSE_HEADER]).settled_amount == "70000"
     )
 
-    assert policy_guard.consumed_budget == 1_750_000
+    # 250,000 (middleware) + 500,000 (exact) + 70,000 (settled from 1,000,000 ceiling) = 820,000
+    assert policy_guard.consumed_budget == 820_000
     await agent_client.aclose()

@@ -273,6 +273,44 @@ class SqliteIdempotencyStore:
             return None
         return str(row[0])
 
+    def update_reserved_amount(
+        self,
+        request_fingerprint: str,
+        settled_atomic_amount: int,
+    ) -> int:
+        """Reconcile a reservation's stored atomic amount down to actual ``settled_atomic_amount``.
+
+        Returns the positive rebate delta (``previous_reserved - settled_atomic_amount``)
+        credited back, or ``0`` if no record exists or ``settled_atomic_amount`` is not lower.
+        """
+        cursor = self._connection.execute(
+            """
+            SELECT reserved_atomic_amount
+            FROM paygate_idempotency_records
+            WHERE request_fingerprint = ?
+            """,
+            (request_fingerprint,),
+        )
+        row = cursor.fetchone()
+        if row is None or row[0] is None:
+            return 0
+
+        previous_reserved_amount: int = int(row[0])
+        if settled_atomic_amount >= previous_reserved_amount:
+            return 0
+
+        rebate_delta: int = previous_reserved_amount - settled_atomic_amount
+        with self._connection:
+            self._connection.execute(
+                """
+                UPDATE paygate_idempotency_records
+                SET reserved_atomic_amount = ?
+                WHERE request_fingerprint = ?
+                """,
+                (settled_atomic_amount, request_fingerprint),
+            )
+        return rebate_delta
+
     def delete_record(self, request_fingerprint: str) -> int | None:
         """Delete a reservation record and return its reserved atomic amount if present."""
         cursor = self._connection.execute(
@@ -490,6 +528,57 @@ class SpendPolicyGuard:
                 transaction_hash=transaction_hash,
             )
 
+    def reconcile_settled_amount(
+        self,
+        request_fingerprint: str,
+        settled_amount: int | str | None,
+    ) -> int:
+        """Reconcile an ``upto`` ceiling reservation against actual ``settled_amount``.
+
+        When ``PAYMENT-RESPONSE`` reports a valid positive integer ``settled_amount``
+        lower than the reserved ceiling for ``request_fingerprint``, credits the
+        unused headroom (``reserved_ceiling - settled_amount``) back to
+        ``consumed_budget`` (and updates ``idempotency_store`` if attached) using
+        exact integer arithmetic. Returns the credited rebate in atomic units.
+        """
+        if settled_amount is None or isinstance(settled_amount, bool):
+            return 0
+
+        settled_atomic_amount: int
+        if isinstance(settled_amount, int):
+            settled_atomic_amount = settled_amount
+        else:
+            cleaned_settled_str: str = str(settled_amount).strip()
+            if not cleaned_settled_str or not cleaned_settled_str.isdigit():
+                return 0
+            settled_atomic_amount = int(cleaned_settled_str)
+
+        if settled_atomic_amount <= 0:
+            return 0
+
+        reserved_in_memory: int | None = self._inflight_reserved_amounts.get(request_fingerprint)
+        rebate_atomic_units: int = 0
+
+        if reserved_in_memory is not None:
+            if settled_atomic_amount < reserved_in_memory:
+                rebate_atomic_units = reserved_in_memory - settled_atomic_amount
+                self._inflight_reserved_amounts[request_fingerprint] = settled_atomic_amount
+            if self.idempotency_store is not None:
+                self.idempotency_store.update_reserved_amount(
+                    request_fingerprint=request_fingerprint,
+                    settled_atomic_amount=settled_atomic_amount,
+                )
+        elif self.idempotency_store is not None:
+            rebate_atomic_units = self.idempotency_store.update_reserved_amount(
+                request_fingerprint=request_fingerprint,
+                settled_atomic_amount=settled_atomic_amount,
+            )
+
+        if rebate_atomic_units > 0:
+            self.consumed_budget = max(0, self.consumed_budget - rebate_atomic_units)
+
+        return rebate_atomic_units
+
     def release_reservation(
         self,
         atomic_amount: int | None = None,
@@ -653,6 +742,10 @@ class PaygateSyncTransport(httpx.BaseTransport):
                     request_fingerprint=request_fingerprint,
                     transaction_hash=decoded_receipt.transaction_hash,
                 )
+                self.guard.reconcile_settled_amount(
+                    request_fingerprint=request_fingerprint,
+                    settled_amount=decoded_receipt.settled_amount,
+                )
             except PaygateProtocolError:
                 pass
         return retry_response
@@ -723,6 +816,10 @@ class PaygateAsyncTransport(httpx.AsyncBaseTransport):
                 self.guard.record_settlement_receipt(
                     request_fingerprint=request_fingerprint,
                     transaction_hash=decoded_receipt.transaction_hash,
+                )
+                self.guard.reconcile_settled_amount(
+                    request_fingerprint=request_fingerprint,
+                    settled_amount=decoded_receipt.settled_amount,
                 )
             except PaygateProtocolError:
                 pass

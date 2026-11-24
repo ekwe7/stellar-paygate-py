@@ -5,6 +5,8 @@ Expose core protocol symbols for convenient imports.
 
 from __future__ import annotations
 
+__version__ = "0.2.0"
+
 # Re‑export submodules for backwards compatibility
 from . import client, codec, exact, fastapi_ext, fault_harness, types
 from .client import (
@@ -89,6 +91,7 @@ from .types import (
 )
 
 __all__ = [
+    "__version__",
     # Core symbols
     "Scheme",
     "FeeMode",

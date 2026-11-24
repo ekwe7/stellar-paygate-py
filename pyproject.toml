@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "stellar-paygate"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python HTTP 402 Pay-Per-Request Payment Gate, Agent Spend-Policy Client & Deterministic Offline Fault-Injection Harness for Stellar / Soroban SEP-41 Tokens"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -46,7 +46,7 @@ stellar-paygate = "stellar_paygate.cli:main"
 
 [tool.poetry]
 name = "stellar-paygate"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python HTTP 402 Pay-Per-Request Payment Gate, Agent Spend-Policy Client & Deterministic Offline Fault-Injection Harness for Stellar / Soroban SEP-41 Tokens"
 authors = ["ekwe7"]
 license = "Apache-2.0"
@@ -90,4 +90,5 @@ files = ["src", "tests"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
-addopts = "-q --cov=stellar_paygate --cov-fail-under=80"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --cov=stellar_paygate --cov-fail-under=90"

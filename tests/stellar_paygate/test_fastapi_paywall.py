@@ -457,8 +457,9 @@ async def test_end_to_end_asgi_httpx_auto_pay_exact_and_upto_flows() -> None:
     assert middleware_response.json()["settled_amount"] == "500000"
     assert PAYMENT_RESPONSE_HEADER in middleware_response.headers
 
-    # Total budget reserved on client: 1,000,000 + 2,000,000 (ceiling) + 500,000 = 3,500,000
-    assert policy_guard.consumed_budget == 3_500_000
+    # Total budget consumed on client after upto rebate reconciliation:
+    # 1,000,000 (exact) + 450,000 (settled from 2,000,000 upto ceiling) + 500,000 = 1,950,000
+    assert policy_guard.consumed_budget == 1_950_000
     await async_client.aclose()
 
 

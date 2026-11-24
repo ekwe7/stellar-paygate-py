@@ -6,8 +6,8 @@
 
 Autonomous HTTP 402 payment‑gateway SDK, agent spend-policy client, and deterministic offline fault-injection harness for the Stellar & Soroban network.
 
-**License:** MIT  
-**Status:** MVP Ready  
+**License:** Apache-2.0  
+**Status:** v0.2.0 Ready  
 **Architecture:** Modular Monolith  
 **Ecosystem:** Stellar / Soroban
 
@@ -15,7 +15,7 @@ Autonomous HTTP 402 payment‑gateway SDK, agent spend-policy client, and determ
 
 ## Note
 
-**MVP v0.1.0 Complete:** `stellar-paygate-py` provides a lightweight Python SDK that enables developers to accept and verify Stellar payments (`exact` and metered `upto` schemes), protect FastAPI routes with HTTP 402 challenges, automate client payments via `httpx` and `SpendPolicyGuard`, generate SEP-0007 transaction URLs, and handle webhook callbacks without running a full Stellar node.
+**Release v0.2.0 Complete:** `stellar-paygate-py` provides a lightweight Python SDK that enables developers to accept and verify Stellar payments (`exact` and metered `upto` schemes), protect FastAPI routes with HTTP 402 challenges, automate client payments via `httpx` and `SpendPolicyGuard`, generate SEP-0007 transaction URLs, and handle webhook callbacks without running a full Stellar node.
 
 ---
 
@@ -108,4 +108,4 @@ Comprehensive reference guides are available in the [`docs/`](docs/) directory:
 
 ### 6. License
 
-`stellar-paygate-py` is released under the **MIT License**.
+`stellar-paygate-py` is released under the **Apache-2.0 License**.
